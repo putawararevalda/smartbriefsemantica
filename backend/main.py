@@ -138,7 +138,14 @@ class FlashcardProvenance(BaseModel):
     """Semantica decision provenance audit trail for a flashcard."""
 
     entity_id: str = Field(..., description="ID of the tracked flashcard entity.")
+    node_id: Optional[str] = Field(default=None, description="Linked knowledge graph node ID.")
     source_node: str = Field(..., description="Knowledge graph node this card was derived from.")
+    source_excerpt: Optional[str] = Field(default=None, description="Document source citation.")
+    confidence: float = Field(default=1.0, description="Decision confidence score.")
+    audit_trail: List[str] = Field(
+        default_factory=list,
+        description="Step-by-step decision provenance lineage steps.",
+    )
     source_document: str = Field(..., description="Root document source.")
     agent: str = Field(default="Semantica PROV-O Engine", description="Agent responsible.")
     activity: str = Field(default="Flashcard Generation", description="Generating activity.")
@@ -176,6 +183,9 @@ class ProcessResponse(BaseModel):
 
     summary: str = Field(..., description="Synthesized summary of the text.")
     concepts: List[ConceptItem] = Field(..., description="Extracted key concepts.")
+    graph_nodes: Optional[List[GraphNode]] = Field(
+        default=None, description="Extracted knowledge graph concept nodes."
+    )
     graph: KnowledgeGraph = Field(..., description="Knowledge graph nodes and edges.")
     flashcards: List[Flashcard] = Field(
         ...,
@@ -539,10 +549,19 @@ async def process_article(payload: ProcessRequest):
         # Compute tamper-evident checksum
         checksum_content = f"{fc_id}|{concept_node_id}|{fc['question']}|{fc['answer']}"
         checksum = hashlib.sha256(checksum_content.encode("utf-8")).hexdigest()
+        audit_steps = [
+            f"1. Tokenized document and mapped entity to concept '{concept_node.label}'",
+            f"2. Asserted RDF triples in embedded Oxigraph store ({concept_node_id})",
+            f"3. Derived Q&A flashcard using Semantica Provenance Manager audit trail",
+        ]
 
         prov_record = FlashcardProvenance(
             entity_id=fc_id,
+            node_id=concept_node_id,
             source_node=concept_node_id,
+            source_excerpt=f"Extracted concept '{concept_node.label}': {concept_node.description}",
+            confidence=1.0,
+            audit_trail=audit_steps,
             source_document="article_input",
             agent="Semantica PROV-O Engine",
             activity="Flashcard Generation & Context Synthesis",
@@ -571,6 +590,7 @@ async def process_article(payload: ProcessRequest):
     return ProcessResponse(
         summary=summary,
         concepts=concept_items,
+        graph_nodes=graph_nodes,
         graph=KnowledgeGraph(
             nodes=graph_nodes,
             edges=graph_edges,

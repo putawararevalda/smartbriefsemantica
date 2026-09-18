@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   backend:
     build:
@@ -11,6 +9,12 @@ services:
     environment:
       - PORT=8003
       - HOST=0.0.0.0
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8003/api/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
     networks:
       - smartbrief-network
     restart: unless-stopped
@@ -28,7 +32,8 @@ services:
       - BACKEND_INTERNAL_URL=http://backend:8003
       - NEXT_PUBLIC_BACKEND_URL=http://localhost:8003
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
     networks:
       - smartbrief-network
     restart: unless-stopped
