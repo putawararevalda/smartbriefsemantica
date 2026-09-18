@@ -1,0 +1,38 @@
+version: '3.8'
+
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: smartbrief-backend
+    ports:
+      - "8003:8003"
+    environment:
+      - PORT=8003
+      - HOST=0.0.0.0
+    networks:
+      - smartbrief-network
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: smartbrief-frontend
+    ports:
+      - "3003:3003"
+    environment:
+      - PORT=3003
+      - HOSTNAME=0.0.0.0
+      - BACKEND_INTERNAL_URL=http://backend:8003
+      - NEXT_PUBLIC_BACKEND_URL=http://localhost:8003
+    depends_on:
+      - backend
+    networks:
+      - smartbrief-network
+    restart: unless-stopped
+
+networks:
+  smartbrief-network:
+    driver: bridge
