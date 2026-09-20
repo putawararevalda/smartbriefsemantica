@@ -1,22 +1,49 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import Header from '@/components/Header';
-import InputForm from '@/components/InputForm';
+import IngestionHub from '@/components/IngestionHub';
+import ProgressStepper from '@/components/ProgressStepper';
+import ErrorAlert, { AppError } from '@/components/ErrorAlert';
 import SummaryCard from '@/components/SummaryCard';
 import KnowledgeGraphCard from '@/components/KnowledgeGraphCard';
 import FlashcardsGrid from '@/components/FlashcardsGrid';
 import ProvenanceModal from '@/components/ProvenanceModal';
 import { ProcessResponse, Flashcard } from '@/types';
-import { AlertCircle, ArrowDown, Sparkles } from 'lucide-react';
+import { Sparkles } from 'lucide-react';
+import { getOfflineSampleResponse, CURATED_SAMPLES } from '@/lib/sampleData';
 
 export default function Home() {
-  const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [text, setText] = useState<string>('');
+  const [selectedSampleId, setSelectedSampleId] = useState<string | null>('neuro-symbolic-ai');
+  const [isLoading, setIsLoading] = useState<boolean>(false);
+  const [error, setError] = useState<AppError | null>(null);
   const [result, setResult] = useState<ProcessResponse | null>(null);
   const [selectedCardForTrace, setSelectedCardForTrace] = useState<Flashcard | null>(null);
 
-  const handleSubmit = async (text: string) => {
+  const abortControllerRef = useRef<AbortController | null>(null);
+  const lastCancelTimeRef = useRef<number>(0);
+  const lastSubmitTimeRef = useRef<number>(0);
+
+  const wordCount = text.trim() ? text.trim().split(/\s+/).length : 0;
+
+  const handleSubmit = async (inputText: string) => {
+    const textToProcess = inputText.trim();
+    if (!textToProcess) return;
+
+    // Debounce rapid submits
+    const now = Date.now();
+    if (now - lastSubmitTimeRef.current < 600) return;
+    lastSubmitTimeRef.current = now;
+
+    // Abort any active prior in-flight controller
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+
     setIsLoading(true);
     setError(null);
 
@@ -27,60 +54,147 @@ export default function Home() {
           'Content-Type': 'application/json',
           'Accept': 'application/json',
         },
-        body: JSON.stringify({ text }),
+        body: JSON.stringify({ text: textToProcess }),
+        signal: controller.signal,
       });
 
       if (!res.ok) {
         const errData = await res.json().catch(() => ({}));
-        throw new Error(errData.error || `Server returned error status ${res.status}`);
+        if (res.status === 400) {
+          setError({
+            category: 'invalid_input',
+            message: errData.error || 'Text is invalid or too short for semantic extraction.',
+            raw: `HTTP 400: ${JSON.stringify(errData)}`,
+          });
+        } else if (res.status === 504 || res.status === 408) {
+          setError({
+            category: 'timeout',
+            message: 'Processing timed out while communicating with the Semantica service.',
+            raw: `HTTP ${res.status}: ${JSON.stringify(errData)}`,
+          });
+        } else {
+          setError({
+            category: 'network_offline',
+            message: 'Unable to reach Semantica API service',
+            raw: `HTTP ${res.status}: ${JSON.stringify(errData)}`,
+          });
+        }
+        return;
       }
 
       const data: ProcessResponse = await res.json();
       setResult(data);
+      setError(null);
     } catch (err: any) {
-      console.error('Submission error:', err);
-      setError(err.message || 'An unexpected error occurred while processing the text.');
+      if (err.name === 'AbortError') {
+        // User triggered cancellation
+        setError({
+          category: 'cancelled',
+          message: 'Analysis was cancelled. Your text remains preserved in the input hub.',
+        });
+      } else {
+        console.error('Submission error:', err);
+        const isNetworkErr =
+          err.message?.includes('fetch') ||
+          err.message?.includes('network') ||
+          err.message?.includes('Failed') ||
+          err.name === 'TypeError';
+
+        setError({
+          category: isNetworkErr ? 'network_offline' : 'generic',
+          message: isNetworkErr
+            ? 'Unable to reach Semantica API service'
+            : err.message || 'An unexpected error occurred.',
+          raw: err.stack || err.message,
+        });
+      }
     } finally {
       setIsLoading(false);
+      abortControllerRef.current = null;
     }
   };
 
+  const handleCancel = () => {
+    const now = Date.now();
+    if (now - lastCancelTimeRef.current < 500) return;
+    lastCancelTimeRef.current = now;
+
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+    setIsLoading(false);
+  };
+
+  const handleRetry = () => {
+    if (text.trim()) {
+      handleSubmit(text);
+    }
+  };
+
+  const handleLoadOfflineSample = () => {
+    const offlineData = getOfflineSampleResponse(selectedSampleId || undefined);
+    if (!text.trim()) {
+      const sample = CURATED_SAMPLES.find((s) => s.id === selectedSampleId) || CURATED_SAMPLES[0];
+      setText(sample.content);
+    }
+    setResult(offlineData);
+    setError(null);
+  };
+
   return (
-    <div className="min-h-screen flex flex-col bg-slate-50">
+    <div className="min-h-screen flex flex-col bg-slate-50 text-slate-900">
       <Header />
 
-      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-8">
+      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-7">
         {/* Welcome / Hero Banner */}
-        <section className="text-center max-w-3xl mx-auto pt-2 pb-4 space-y-3">
-          <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-blue-100/80 text-blue-800 border border-blue-200 shadow-sm">
+        <section className="text-center max-w-3xl mx-auto pt-2 pb-2 space-y-3">
+          <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-blue-100/80 text-blue-800 border border-blue-200 shadow-xs">
             <Sparkles className="w-3.5 h-3.5 text-blue-600" />
-            <span>Next.js + FastAPI + Semantica Architecture</span>
+            <span>FastAPI + Oxigraph Triplestore + W3C PROV-O</span>
           </div>
           <h2 className="text-3xl sm:text-4xl font-extrabold text-slate-900 tracking-tight">
-            Synthesize Knowledge with <span className="text-transparent bg-clip-text bg-gradient-to-r from-blue-600 to-indigo-600">Verifiable Provenance</span>
+            Synthesize Knowledge with{' '}
+            <span className="text-transparent bg-clip-text bg-gradient-to-r from-blue-600 via-indigo-600 to-purple-600">
+              Verifiable Provenance
+            </span>
           </h2>
           <p className="text-sm sm:text-base text-slate-600 leading-relaxed">
             Extract articles into structured RDF knowledge graphs and interactive Q&A flashcards. Every generated answer is anchored to an immutable Oxigraph node and verifiable audit trail.
           </p>
         </section>
 
-        {/* Input Form */}
-        <InputForm onSubmit={handleSubmit} isLoading={isLoading} />
+        {/* Phase 1: Multi-Modal Ingestion Hub */}
+        <IngestionHub
+          text={text}
+          setText={setText}
+          onSubmit={handleSubmit}
+          isLoading={isLoading}
+          selectedSampleId={selectedSampleId}
+          onSelectSampleId={setSelectedSampleId}
+        />
 
-        {/* Error Alert */}
+        {/* Phase 2: Deterministic 4-Stage Progressive Status Stepper */}
+        {isLoading && (
+          <ProgressStepper
+            isLoading={isLoading}
+            onCancel={handleCancel}
+            wordCount={wordCount}
+          />
+        )}
+
+        {/* Actionable Error Recovery Alert */}
         {error && (
-          <div className="rounded-2xl bg-rose-50 border border-rose-200 p-4 flex items-start gap-3 text-sm text-rose-800">
-            <AlertCircle className="w-5 h-5 text-rose-600 shrink-0 mt-0.5" />
-            <div>
-              <p className="font-semibold">Processing Failed</p>
-              <p className="text-rose-700 text-xs mt-0.5">{error}</p>
-            </div>
-          </div>
+          <ErrorAlert
+            error={error}
+            onRetry={handleRetry}
+            onLoadOfflineSample={handleLoadOfflineSample}
+            onDismiss={() => setError(null)}
+          />
         )}
 
         {/* Results Area */}
-        {result && (
-          <div className="space-y-8 pt-4 animate-in fade-in slide-in-from-bottom-4 duration-300">
+        {result && !isLoading && (
+          <section aria-label="Synthesis Results" className="space-y-8 pt-4 animate-in fade-in slide-in-from-bottom-4 duration-300">
             {/* Executive Summary */}
             {result.summary && <SummaryCard summary={result.summary} />}
 
@@ -96,7 +210,7 @@ export default function Home() {
                 onTraceSource={(card) => setSelectedCardForTrace(card)}
               />
             )}
-          </div>
+          </section>
         )}
       </main>
 
