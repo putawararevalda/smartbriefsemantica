@@ -9,6 +9,7 @@ import SummaryCard from '@/components/SummaryCard';
 import KnowledgeGraphCard from '@/components/KnowledgeGraphCard';
 import FlashcardsGrid from '@/components/FlashcardsGrid';
 import ProvenanceModal from '@/components/ProvenanceModal';
+import DualPaneWorkspace from '@/components/DualPaneWorkspace';
 import { ProcessResponse, Flashcard } from '@/types';
 import { Sparkles } from 'lucide-react';
 import { getOfflineSampleResponse, CURATED_SAMPLES } from '@/lib/sampleData';
@@ -145,33 +146,37 @@ export default function Home() {
     <div className="min-h-screen flex flex-col bg-slate-50 text-slate-900">
       <Header />
 
-      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-7">
-        {/* Welcome / Hero Banner */}
-        <section className="text-center max-w-3xl mx-auto pt-2 pb-2 space-y-3">
-          <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-blue-100/80 text-blue-800 border border-blue-200 shadow-xs">
-            <Sparkles className="w-3.5 h-3.5 text-blue-600" />
-            <span>FastAPI + Oxigraph Triplestore + W3C PROV-O</span>
-          </div>
-          <h2 className="text-3xl sm:text-4xl font-extrabold text-slate-900 tracking-tight">
-            Synthesize Knowledge with{' '}
-            <span className="text-transparent bg-clip-text bg-gradient-to-r from-blue-600 via-indigo-600 to-purple-600">
-              Verifiable Provenance
-            </span>
-          </h2>
-          <p className="text-sm sm:text-base text-slate-600 leading-relaxed">
-            Extract articles into structured RDF knowledge graphs and interactive Q&A flashcards. Every generated answer is anchored to an immutable Oxigraph node and verifiable audit trail.
-          </p>
-        </section>
+      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6">
+        {/* Welcome / Hero Banner - Shown when not viewing active results */}
+        {!result && (
+          <section className="text-center max-w-3xl mx-auto pt-2 pb-2 space-y-3">
+            <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-blue-100/80 text-blue-800 border border-blue-200 shadow-xs">
+              <Sparkles className="w-3.5 h-3.5 text-blue-600" />
+              <span>FastAPI + Oxigraph Triplestore + W3C PROV-O</span>
+            </div>
+            <h2 className="text-3xl sm:text-4xl font-extrabold text-slate-900 tracking-tight">
+              Synthesize Knowledge with{' '}
+              <span className="text-transparent bg-clip-text bg-gradient-to-r from-blue-600 via-indigo-600 to-purple-600">
+                Verifiable Provenance
+              </span>
+            </h2>
+            <p className="text-sm sm:text-base text-slate-600 leading-relaxed">
+              Extract articles into structured RDF knowledge graphs and interactive Q&A flashcards. Every generated answer is anchored to an immutable Oxigraph node and verifiable audit trail.
+            </p>
+          </section>
+        )}
 
-        {/* Phase 1: Multi-Modal Ingestion Hub */}
-        <IngestionHub
-          text={text}
-          setText={setText}
-          onSubmit={handleSubmit}
-          isLoading={isLoading}
-          selectedSampleId={selectedSampleId}
-          onSelectSampleId={setSelectedSampleId}
-        />
+        {/* Phase 1: Multi-Modal Ingestion Hub (active when results are not shown) */}
+        {!result && (
+          <IngestionHub
+            text={text}
+            setText={setText}
+            onSubmit={handleSubmit}
+            isLoading={isLoading}
+            selectedSampleId={selectedSampleId}
+            onSelectSampleId={setSelectedSampleId}
+          />
+        )}
 
         {/* Phase 2: Deterministic 4-Stage Progressive Status Stepper */}
         {isLoading && (
@@ -192,26 +197,19 @@ export default function Home() {
           />
         )}
 
-        {/* Results Area */}
+        {/* Phase 3 & 4: Dual-Pane Synthesis Workspace & Active Recall Study Deck */}
         {result && !isLoading && (
-          <section aria-label="Synthesis Results" className="space-y-8 pt-4 animate-in fade-in slide-in-from-bottom-4 duration-300">
-            {/* Executive Summary */}
-            {result.summary && <SummaryCard summary={result.summary} />}
-
-            {/* Knowledge Graph Concepts */}
-            {(result.graph_nodes || result.concepts) && (
-              <KnowledgeGraphCard concepts={result.graph_nodes || result.concepts} />
-            )}
-
-            {/* Flashcards Grid */}
-            {result.flashcards && result.flashcards.length > 0 && (
-              <FlashcardsGrid
-                flashcards={result.flashcards}
-                onTraceSource={(card) => setSelectedCardForTrace(card)}
-              />
-            )}
+          <section aria-label="Dual-Pane Synthesis Workspace" className="animate-in fade-in slide-in-from-bottom-3 duration-300">
+            <DualPaneWorkspace
+              sourceText={text}
+              result={result}
+              onNewArticle={() => setResult(null)}
+              onTraceSource={(card) => setSelectedCardForTrace(card)}
+              documentTitle={selectedSampleId ? CURATED_SAMPLES.find(s => s.id === selectedSampleId)?.title : undefined}
+            />
           </section>
         )}
+
       </main>
 
       {/* Provenance Trace Modal */}
