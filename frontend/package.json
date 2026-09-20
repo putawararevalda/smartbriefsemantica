@@ -7,7 +7,7 @@
     "build": "next build",
     "start": "next start -p 3003",
     "lint": "next lint",
-    "test": "node --test tests/api_and_components.test.mjs tests/sprint1_ingestion_and_stepper.test.mjs tests/sprint2_dual_pane_and_deck.test.mjs tests/qa_sprint2_verification.test.mjs"
+    "test": "node --test tests/api_and_components.test.mjs tests/sprint1_ingestion_and_stepper.test.mjs tests/sprint2_dual_pane_and_deck.test.mjs tests/qa_sprint2_verification.test.mjs tests/smar10_badge_and_tab_clickability.test.mjs"
   },
   "dependencies": {
     "clsx": "^2.1.1",

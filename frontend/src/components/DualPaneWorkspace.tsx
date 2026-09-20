@@ -51,6 +51,9 @@ export default function DualPaneWorkspace({
 
   const leftPaneScrollRef = useRef<HTMLDivElement>(null);
   const anchorRefs = useRef<Record<number, HTMLDivElement | null>>({});
+  const flashcardDeckRef = useRef<HTMLDivElement>(null);
+  const summaryRef = useRef<HTMLDivElement>(null);
+  const conceptMatrixRef = useRef<HTMLDivElement>(null);
 
   const flashcards = result.flashcards || [];
   const concepts = useMemo(() => {
@@ -98,6 +101,29 @@ export default function DualPaneWorkspace({
       targetEl.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     }
   }, [activeCardIndex, activeTab]);
+ 
+  // Tab switching and contextual scroll/reset action
+  const handleTabChange = (tab: ActiveTab) => {
+    if (activeTab !== tab) {
+      setActiveTab(tab);
+    } else {
+      // Re-clicking an active tab triggers contextual action
+      if (tab === 'flashcards') {
+        flashcardDeckRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      } else if (tab === 'concepts') {
+        setConceptFilter('');
+        conceptMatrixRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      } else if (tab === 'summary') {
+        summaryRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      }
+    }
+  };
+
+  // Dedicated badge click handler ensuring event capture and stopPropagation
+  const handleBadgeClick = (tab: ActiveTab, e: React.MouseEvent) => {
+    e.stopPropagation();
+    handleTabChange(tab);
+  };
 
   // Copy executive summary
   const handleCopySummary = async () => {
@@ -141,29 +167,29 @@ export default function DualPaneWorkspace({
         <button
           type="button"
           onClick={() => setMobileView('source')}
-          className={`flex-1 py-2 px-3 rounded-lg text-xs font-bold flex items-center justify-center gap-2 transition-all ${
+          className={`cursor-pointer flex-1 py-2 px-3 rounded-lg text-xs font-bold flex items-center justify-center gap-2 transition-all ${
             mobileView === 'source'
               ? 'bg-white text-blue-700 shadow-sm'
               : 'text-slate-600 hover:text-slate-900'
           }`}
           aria-label="View Source Document Pane"
         >
-          <FileText className="w-3.5 h-3.5" />
-          <span>Source Document ({wordCount} words)</span>
+          <FileText className="w-3.5 h-3.5 pointer-events-none shrink-0" />
+          <span className="pointer-events-none select-none">Source Document ({wordCount} words)</span>
         </button>
 
         <button
           type="button"
           onClick={() => setMobileView('synthesis')}
-          className={`flex-1 py-2 px-3 rounded-lg text-xs font-bold flex items-center justify-center gap-2 transition-all ${
+          className={`cursor-pointer flex-1 py-2 px-3 rounded-lg text-xs font-bold flex items-center justify-center gap-2 transition-all ${
             mobileView === 'synthesis'
               ? 'bg-white text-blue-700 shadow-sm'
               : 'text-slate-600 hover:text-slate-900'
           }`}
           aria-label="View Synthesis and Study Hub Pane"
         >
-          <Layers className="w-3.5 h-3.5" />
-          <span>Synthesis & Study Hub</span>
+          <Layers className="w-3.5 h-3.5 pointer-events-none shrink-0" />
+          <span className="pointer-events-none select-none">Synthesis & Study Hub</span>
         </button>
       </div>
 
@@ -245,11 +271,19 @@ export default function DualPaneWorkspace({
 
               // Highlight search query or concept
               let displayContent: React.ReactNode = para;
-              if (searchQuery.trim()) {
-                const parts = para.split(new RegExp(`(${searchQuery.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi'));
+              const activeHighlight = searchQuery.trim() || highlightedConcept || '';
+              if (activeHighlight) {
+                const parts = para.split(new RegExp(`(${activeHighlight.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi'));
                 displayContent = parts.map((part, pIdx) =>
-                  part.toLowerCase() === searchQuery.toLowerCase() ? (
-                    <mark key={pIdx} className="bg-amber-200 text-slate-900 rounded px-0.5 font-medium">
+                  part.toLowerCase() === activeHighlight.toLowerCase() ? (
+                    <mark
+                      key={pIdx}
+                      className={
+                        searchQuery.trim()
+                          ? 'bg-amber-200 text-slate-900 rounded px-0.5 font-medium'
+                          : 'bg-indigo-100 text-indigo-950 ring-1 ring-indigo-300 rounded px-0.5 font-medium'
+                      }
+                    >
                       {part}
                     </mark>
                   ) : (
@@ -258,6 +292,11 @@ export default function DualPaneWorkspace({
                 );
               }
 
+              const isConceptMatch = Boolean(
+                highlightedConcept &&
+                para.toLowerCase().includes(highlightedConcept.toLowerCase())
+              );
+
               return (
                 <div
                   key={idx}
@@ -265,6 +304,8 @@ export default function DualPaneWorkspace({
                   className={`relative transition-all duration-300 rounded-xl p-3 sm:p-4 ${
                     isAnchor
                       ? 'bg-indigo-50/90 border-l-4 border-indigo-600 shadow-xs ring-1 ring-indigo-200/70'
+                      : isConceptMatch
+                      ? 'bg-indigo-50/50 border-l-4 border-indigo-400 ring-1 ring-indigo-200/50'
                       : 'bg-transparent border-l-2 border-transparent hover:bg-slate-50/80'
                   }`}
                 >
@@ -273,6 +314,14 @@ export default function DualPaneWorkspace({
                     <div className="flex items-center gap-1.5 text-[11px] font-bold text-indigo-700 mb-2 uppercase tracking-wider">
                       <BookmarkCheck className="w-3.5 h-3.5 text-indigo-600" />
                       <span>Active Citation Anchor &bull; Card {activeCardIndex + 1}</span>
+                    </div>
+                  )}
+
+                  {/* Concept match badge if active concept filter matches this paragraph */}
+                  {!isAnchor && isConceptMatch && (
+                    <div className="flex items-center gap-1.5 text-[11px] font-bold text-indigo-600 mb-2">
+                      <Tag className="w-3 h-3 text-indigo-500" />
+                      <span>Referenced Concept &bull; {highlightedConcept}</span>
                     </div>
                   )}
 
@@ -296,25 +345,41 @@ export default function DualPaneWorkspace({
         >
           {/* Sticky Tab Navigation Sub-Header */}
           <div className="bg-white rounded-2xl p-2 sm:p-2.5 border border-slate-200/90 shadow-xs flex items-center justify-between gap-1 sm:gap-2">
-            <div className="flex items-center gap-1 sm:gap-2 flex-1">
+            <div className="flex items-center gap-1 sm:gap-2 flex-1" role="tablist" aria-label="Synthesis and study hub tabs">
               {/* Tab 1: Flashcards */}
               <button
                 type="button"
-                onClick={() => setActiveTab('flashcards')}
-                className={`flex-1 py-2 px-2.5 sm:px-3.5 rounded-xl text-xs sm:text-sm font-bold flex items-center justify-center gap-1.5 transition-all focus:outline-none focus:ring-2 focus:ring-blue-500/20 ${
+                role="tab"
+                id="tab-flashcards"
+                aria-selected={activeTab === 'flashcards'}
+                aria-controls="tabpanel-flashcards"
+                onClick={() => handleTabChange('flashcards')}
+                className={`cursor-pointer flex-1 py-2 px-2.5 sm:px-3.5 rounded-xl text-xs sm:text-sm font-bold flex items-center justify-center gap-1.5 transition-all focus:outline-none focus:ring-2 focus:ring-blue-500/20 ${
                   activeTab === 'flashcards'
                     ? 'bg-blue-600 text-white shadow-sm'
                     : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
                 }`}
                 aria-label="Flashcards active recall deck tab"
               >
-                <Layers className="w-3.5 h-3.5" />
-                <span>Flashcards</span>
+                <Layers className="w-3.5 h-3.5 pointer-events-none shrink-0" />
+                <span className="pointer-events-none select-none">Flashcards</span>
                 <span
-                  className={`text-[10px] font-mono px-1.5 py-0.5 rounded-full ${
+                  role="button"
+                  tabIndex={0}
+                  onClick={(e) => handleBadgeClick('flashcards', e)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      handleTabChange('flashcards');
+                    }
+                  }}
+                  aria-label={`View ${flashcards.length} flashcards`}
+                  title={`Click badge to view ${flashcards.length} flashcards`}
+                  className={`cursor-pointer select-none text-[10px] font-mono px-1.5 py-0.5 rounded-full transition-all hover:scale-110 active:scale-95 ${
                     activeTab === 'flashcards'
-                      ? 'bg-blue-700/80 text-white'
-                      : 'bg-slate-200 text-slate-700'
+                      ? 'bg-blue-700/80 text-white shadow-xs hover:bg-blue-800'
+                      : 'bg-slate-200 text-slate-700 hover:bg-slate-300'
                   }`}
                 >
                   {flashcards.length}
@@ -324,36 +389,56 @@ export default function DualPaneWorkspace({
               {/* Tab 2: Executive Summary */}
               <button
                 type="button"
-                onClick={() => setActiveTab('summary')}
-                className={`flex-1 py-2 px-2.5 sm:px-3.5 rounded-xl text-xs sm:text-sm font-bold flex items-center justify-center gap-1.5 transition-all focus:outline-none focus:ring-2 focus:ring-blue-500/20 ${
+                role="tab"
+                id="tab-summary"
+                aria-selected={activeTab === 'summary'}
+                aria-controls="tabpanel-summary"
+                onClick={() => handleTabChange('summary')}
+                className={`cursor-pointer flex-1 py-2 px-2.5 sm:px-3.5 rounded-xl text-xs sm:text-sm font-bold flex items-center justify-center gap-1.5 transition-all focus:outline-none focus:ring-2 focus:ring-blue-500/20 ${
                   activeTab === 'summary'
                     ? 'bg-blue-600 text-white shadow-sm'
                     : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
                 }`}
                 aria-label="Executive summary tab"
               >
-                <AlignLeft className="w-3.5 h-3.5" />
-                <span>Summary</span>
+                <AlignLeft className="w-3.5 h-3.5 pointer-events-none shrink-0" />
+                <span className="pointer-events-none select-none">Summary</span>
               </button>
 
               {/* Tab 3: Concept Matrix */}
               <button
                 type="button"
-                onClick={() => setActiveTab('concepts')}
-                className={`flex-1 py-2 px-2.5 sm:px-3.5 rounded-xl text-xs sm:text-sm font-bold flex items-center justify-center gap-1.5 transition-all focus:outline-none focus:ring-2 focus:ring-blue-500/20 ${
+                role="tab"
+                id="tab-concepts"
+                aria-selected={activeTab === 'concepts'}
+                aria-controls="tabpanel-concepts"
+                onClick={() => handleTabChange('concepts')}
+                className={`cursor-pointer flex-1 py-2 px-2.5 sm:px-3.5 rounded-xl text-xs sm:text-sm font-bold flex items-center justify-center gap-1.5 transition-all focus:outline-none focus:ring-2 focus:ring-blue-500/20 ${
                   activeTab === 'concepts'
                     ? 'bg-blue-600 text-white shadow-sm'
                     : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
                 }`}
                 aria-label="Knowledge concepts matrix tab"
               >
-                <Network className="w-3.5 h-3.5" />
-                <span>Concepts</span>
+                <Network className="w-3.5 h-3.5 pointer-events-none shrink-0" />
+                <span className="pointer-events-none select-none">Concepts</span>
                 <span
-                  className={`text-[10px] font-mono px-1.5 py-0.5 rounded-full ${
+                  role="button"
+                  tabIndex={0}
+                  onClick={(e) => handleBadgeClick('concepts', e)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      handleTabChange('concepts');
+                    }
+                  }}
+                  aria-label={`View ${concepts.length} concepts`}
+                  title={`Click badge to view ${concepts.length} concepts`}
+                  className={`cursor-pointer select-none text-[10px] font-mono px-1.5 py-0.5 rounded-full transition-all hover:scale-110 active:scale-95 ${
                     activeTab === 'concepts'
-                      ? 'bg-blue-700/80 text-white'
-                      : 'bg-slate-200 text-slate-700'
+                      ? 'bg-blue-700/80 text-white shadow-xs hover:bg-blue-800'
+                      : 'bg-slate-200 text-slate-700 hover:bg-slate-300'
                   }`}
                 >
                   {concepts.length}
@@ -364,7 +449,13 @@ export default function DualPaneWorkspace({
 
           {/* TAB 1: 3D FLIP FLASHCARD ACTIVE RECALL DECK */}
           {activeTab === 'flashcards' && (
-            <div className="animate-in fade-in duration-200">
+            <div
+              id="tabpanel-flashcards"
+              role="tabpanel"
+              aria-labelledby="tab-flashcards"
+              ref={flashcardDeckRef}
+              className="animate-in fade-in duration-200"
+            >
               <FlashcardDeck
                 flashcards={flashcards}
                 onTraceSource={onTraceSource}
@@ -376,7 +467,13 @@ export default function DualPaneWorkspace({
 
           {/* TAB 2: STRUCTURED EXECUTIVE SUMMARY */}
           {activeTab === 'summary' && (
-            <div className="bg-white rounded-2xl p-6 sm:p-7 border border-slate-200/90 shadow-sm space-y-5 animate-in fade-in duration-200">
+            <div
+              id="tabpanel-summary"
+              role="tabpanel"
+              aria-labelledby="tab-summary"
+              ref={summaryRef}
+              className="bg-white rounded-2xl p-6 sm:p-7 border border-slate-200/90 shadow-sm space-y-5 animate-in fade-in duration-200"
+            >
               {/* Summary Header & Copy Button */}
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-slate-100">
                 <div className="flex items-center gap-2.5">
@@ -447,7 +544,13 @@ export default function DualPaneWorkspace({
 
           {/* TAB 3: INTERACTIVE CONCEPT MATRIX / GRAPH TRIPLES */}
           {activeTab === 'concepts' && (
-            <div className="bg-white rounded-2xl p-6 sm:p-7 border border-slate-200/90 shadow-sm space-y-5 animate-in fade-in duration-200">
+            <div
+              id="tabpanel-concepts"
+              role="tabpanel"
+              aria-labelledby="tab-concepts"
+              ref={conceptMatrixRef}
+              className="bg-white rounded-2xl p-6 sm:p-7 border border-slate-200/90 shadow-sm space-y-5 animate-in fade-in duration-200"
+            >
               {/* Concept Matrix Header & Search */}
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-slate-100">
                 <div className="flex items-center gap-2.5">
@@ -457,7 +560,7 @@ export default function DualPaneWorkspace({
                   <div>
                     <h3 className="text-base font-bold text-slate-900">Extracted Knowledge Concepts</h3>
                     <p className="text-xs text-slate-500">
-                      RDF triples and semantic entities indexed in Oxigraph
+                      RDF triples and semantic entities indexed in Oxigraph &bull; Click any card to highlight references
                     </p>
                   </div>
                 </div>
@@ -482,15 +585,44 @@ export default function DualPaneWorkspace({
                   const type = concept.type || 'Entity';
                   const description = concept.description || '';
                   const relations = concept.relations || [];
+                  const isHighlighted = highlightedConcept === (concept.id || label);
+
+                  // Find matching flashcard for this concept
+                  const matchingFlashcardIdx = flashcards.findIndex((fc) => {
+                    const prov = typeof fc.provenance === 'object' && fc.provenance !== null ? fc.provenance : {};
+                    const nodeId = (prov.node_id || '').toLowerCase();
+                    const conceptName = (prov.concept || '').toLowerCase();
+                    const cId = (concept.id || '').toLowerCase();
+                    const cLabel = (label || '').toLowerCase();
+                    return (
+                      (cId && nodeId.includes(cId)) ||
+                      (cLabel && conceptName.includes(cLabel)) ||
+                      (cLabel && nodeId.includes(cLabel))
+                    );
+                  });
 
                   return (
                     <div
                       key={concept.id || cIdx}
-                      className="p-4 rounded-xl border border-slate-200/80 bg-gradient-to-b from-white to-slate-50/50 hover:border-indigo-300 hover:shadow-sm transition-all flex flex-col justify-between space-y-2.5"
+                      role="button"
+                      tabIndex={0}
+                      onClick={() => setHighlightedConcept(isHighlighted ? null : (concept.id || label))}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                          e.preventDefault();
+                          setHighlightedConcept(isHighlighted ? null : (concept.id || label));
+                        }
+                      }}
+                      className={`cursor-pointer p-4 rounded-xl border transition-all flex flex-col justify-between space-y-2.5 ${
+                        isHighlighted
+                          ? 'border-indigo-500 bg-indigo-50/60 shadow-md ring-2 ring-indigo-500/30'
+                          : 'border-slate-200/80 bg-gradient-to-b from-white to-slate-50/50 hover:border-indigo-300 hover:shadow-sm'
+                      }`}
+                      aria-label={`Concept: ${label}. Click to ${isHighlighted ? 'unhighlight' : 'highlight in source reader'}`}
                     >
                       <div>
                         <div className="flex items-center justify-between gap-2 mb-1.5">
-                          <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded-md border border-indigo-200">
+                          <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded-md border border-indigo-200 pointer-events-none">
                             <Tag className="w-3 h-3" />
                             {type}
                           </span>
@@ -510,12 +642,32 @@ export default function DualPaneWorkspace({
                         )}
                       </div>
 
-                      {relations && relations.length > 0 && (
-                        <div className="pt-2 border-t border-slate-100 flex items-center gap-1.5 text-[11px] text-slate-500">
-                          <Share2 className="w-3 h-3 text-slate-400 shrink-0" />
-                          <span className="truncate">{relations.join(', ')}</span>
-                        </div>
-                      )}
+                      <div className="pt-2 border-t border-slate-100 flex items-center justify-between gap-1.5 text-[11px]">
+                        {relations && relations.length > 0 ? (
+                          <div className="flex items-center gap-1 text-slate-500 min-w-0">
+                            <Share2 className="w-3 h-3 text-slate-400 shrink-0" />
+                            <span className="truncate">{relations.join(', ')}</span>
+                          </div>
+                        ) : (
+                          <span className="text-slate-400">Triple Node</span>
+                        )}
+
+                        {matchingFlashcardIdx !== -1 && (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setActiveCardIndex(matchingFlashcardIdx);
+                              handleTabChange('flashcards');
+                            }}
+                            className="inline-flex items-center gap-1 text-blue-600 hover:text-blue-800 font-semibold text-[11px] hover:underline shrink-0"
+                            title={`Jump to Flashcard ${matchingFlashcardIdx + 1}`}
+                          >
+                            <span>Card {matchingFlashcardIdx + 1}</span>
+                            <ArrowRight className="w-3 h-3" />
+                          </button>
+                        )}
+                      </div>
                     </div>
                   );
                 })}
