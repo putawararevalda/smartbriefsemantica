@@ -7,10 +7,37 @@ and W3C PROV-O decision provenance tracking.
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 import hashlib
+import json
 import os
 import re
 from typing import Any, Dict, List, Optional
 import uuid
+# ---------------------------------------------------------------------------
+# Load .env file dynamically if present
+# ---------------------------------------------------------------------------
+def _load_env_file():
+    for candidate in [
+        os.path.join(os.path.dirname(__file__), ".env"),
+        os.path.join(os.path.dirname(__file__), "..", ".env"),
+        "/app/.env",
+        ".env",
+    ]:
+        if os.path.exists(candidate):
+            try:
+                with open(candidate, "r", encoding="utf-8") as f:
+                    for line in f:
+                        line = line.strip()
+                        if line and not line.startswith("#") and "=" in line:
+                            k, v = line.split("=", 1)
+                            k, v = k.strip(), v.strip().strip('"').strip("'")
+                            if k and not os.environ.get(k):
+                                os.environ[k] = v
+            except Exception:
+                pass
+
+_load_env_file()
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "").strip()
+
 
 from fastapi import FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -471,6 +498,72 @@ def _generate_flashcards_data(
     return result[:3]
 
 
+def _extract_with_openai(text: str, model: str = "gpt-4o-mini") -> Optional[Dict[str, Any]]:
+    """Extract summary, structured knowledge graph concepts, triplets, and flashcards using OpenAI."""
+    api_key = os.environ.get("OPENAI_API_KEY", "").strip()
+    if not api_key:
+        return None
+    try:
+        from openai import OpenAI
+        client = OpenAI(api_key=api_key)
+        sys_prompt = (
+            "You are an expert knowledge engineer and pedagogical learning assistant. "
+            "Analyze the given text to extract a structured knowledge graph and active recall flashcards. "
+            "You MUST return ONLY a JSON object with this exact structure:\n"
+            "{\n"
+            '  "summary": "Concise executive summary of the document (2-3 sentences).",\n'
+            '  "concepts": [\n'
+            '    {\n'
+            '      "name": "Concept Name",\n'
+            '      "category": "Category or Entity Type (e.g. Quantum Architecture, Economics, Biology)",\n'
+            '      "description": "Clear, informative explanation of this concept based on the text."\n'
+            '    }\n'
+            '  ],\n'
+            '  "triplets": [\n'
+            '    {\n'
+            '      "subject": "Concept 1",\n'
+            '      "predicate": "relation (e.g. utilizes, implements, demonstrates, regulates, causes)",\n'
+            '      "object": "Concept 2"\n'
+            '    }\n'
+            '  ],\n'
+            '  "flashcards": [\n'
+            '    {\n'
+            '      "target_concept": "Concept Name (must correspond to one of the concepts above)",\n'
+            '      "question": "Clear, high-yield active recall question testing understanding of this concept.",\n'
+            '      "answer": "Accurate, concise answer derived directly from the document.",\n'
+            '      "source_excerpt": "Exact or near-exact sentence from the text that justifies this question and answer."\n'
+            '    }\n'
+            '  ]\n'
+            "}\n"
+            "Constraints:\n"
+            "- Exactly 3 concepts in 'concepts'.\n"
+            "- At least 2 semantic triplets in 'triplets' connecting these concepts.\n"
+            "- Exactly 3 flashcards in 'flashcards', each targeting one of the extracted concepts.\n"
+            "- Ground everything directly in the provided text."
+        )
+
+        resp = client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": sys_prompt},
+                {"role": "user", "content": f"Document text:\n\n{text}"}
+            ],
+            response_format={"type": "json_object"},
+            temperature=0.2,
+            max_tokens=1500,
+        )
+        content = resp.choices[0].message.content
+        if not content:
+            return None
+        data = json.loads(content)
+        if isinstance(data, dict) and "concepts" in data and len(data["concepts"]) >= 3:
+            return data
+        return None
+    except Exception as e:
+        print(f"[OpenAI Extraction Error] {e}")
+        return None
+
+
 # ---------------------------------------------------------------------------
 # API Endpoints
 # ---------------------------------------------------------------------------
@@ -497,6 +590,7 @@ async def health_check():
         "version": "1.0.0",
         "oxigraph_store_active": store_ready,
         "provenance_manager_active": prov_ready,
+        "openai_available": bool(os.environ.get("OPENAI_API_KEY", "").strip()),
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
 
@@ -529,13 +623,24 @@ async def process_article(payload: ProcessRequest):
     session_id = f"proc_{uuid.uuid4().hex[:8]}"
     doc_id = f"urn:smartbrief:doc:{session_id}"
 
-    # 1. Synthesize Executive Summary
-    summary = _extract_summary(text)
+    # 1. Attempt OpenAI extraction first, falling back to local extraction
+    llm_data = _extract_with_openai(text)
+    is_llm = llm_data is not None and len(llm_data.get("concepts", [])) >= 3
 
-    # 2. Extract Key Concepts
-    raw_concepts = _extract_key_concepts(text)
+    if is_llm:
+        summary = llm_data.get("summary") or _extract_summary(text)
+        raw_concepts = llm_data.get("concepts")[:3]
+        raw_triplets = llm_data.get("triplets", [])
+        raw_flashcards = llm_data.get("flashcards", [])[:3]
+        agent_name = "OpenAI GPT-4o-mini + Semantica PROV-O"
+    else:
+        summary = _extract_summary(text)
+        raw_concepts = _extract_key_concepts(text)
+        raw_triplets = []
+        raw_flashcards = _generate_flashcards_data(raw_concepts, text)
+        agent_name = "Semantica PROV-O Engine"
 
-    # 3. Populate Semantica's embedded Oxigraph store
+    # 2. Populate Semantica's embedded Oxigraph store
     graph_nodes: List[GraphNode] = []
     graph_edges: List[GraphEdge] = []
     concept_items: List[ConceptItem] = []
@@ -594,39 +699,66 @@ async def process_article(payload: ProcessRequest):
                 "concept_name": c["name"],
                 "category": c["category"],
                 "session_id": session_id,
+                "agent": agent_name,
             },
         )
 
-    # Create interconnecting semantic edges between extracted concepts
-    if len(graph_nodes) >= 2:
-        rel_1 = Triplet(
-            subject=f"https://smartbrief.ai/concept/{_slugify(raw_concepts[0]['name'])}",
-            predicate="https://smartbrief.ai/ontology/interactsWith",
-            object=f"https://smartbrief.ai/concept/{_slugify(raw_concepts[1]['name'])}",
-        )
-        oxigraph_store.add_triplet(rel_1)
-        graph_edges.append(
-            GraphEdge(
-                source=graph_nodes[0].id,
-                target=graph_nodes[1].id,
-                relation="interactsWith",
-            )
-        )
+    # 3. Create interconnecting semantic edges between extracted concepts
+    # If LLM extracted triplets, store in Oxigraph and populate graph_edges
+    if raw_triplets:
+        for t in raw_triplets:
+            subj_name = t.get("subject", "").strip()
+            pred_name = t.get("predicate", "relatedTo").strip()
+            obj_name = t.get("object", "").strip()
+            if subj_name and obj_name:
+                subj_slug = _slugify(subj_name)
+                obj_slug = _slugify(obj_name)
+                pred_slug = _slugify(pred_name)
+                rel_triplet = Triplet(
+                    subject=f"https://smartbrief.ai/concept/{subj_slug}",
+                    predicate=f"https://smartbrief.ai/ontology/{pred_slug}",
+                    object=f"https://smartbrief.ai/concept/{obj_slug}",
+                )
+                oxigraph_store.add_triplet(rel_triplet)
+                graph_edges.append(
+                    GraphEdge(
+                        source=f"concept:{subj_slug}",
+                        target=f"concept:{obj_slug}",
+                        relation=pred_name,
+                    )
+                )
 
-    if len(graph_nodes) >= 3:
-        rel_2 = Triplet(
-            subject=f"https://smartbrief.ai/concept/{_slugify(raw_concepts[1]['name'])}",
-            predicate="https://smartbrief.ai/ontology/enables",
-            object=f"https://smartbrief.ai/concept/{_slugify(raw_concepts[2]['name'])}",
-        )
-        oxigraph_store.add_triplet(rel_2)
-        graph_edges.append(
-            GraphEdge(
-                source=graph_nodes[1].id,
-                target=graph_nodes[2].id,
-                relation="enables",
+    # Fallback edges if no triplets were extracted
+    if len(graph_edges) == 0:
+        if len(graph_nodes) >= 2:
+            rel_1 = Triplet(
+                subject=f"https://smartbrief.ai/concept/{_slugify(raw_concepts[0]['name'])}",
+                predicate="https://smartbrief.ai/ontology/interactsWith",
+                object=f"https://smartbrief.ai/concept/{_slugify(raw_concepts[1]['name'])}",
             )
-        )
+            oxigraph_store.add_triplet(rel_1)
+            graph_edges.append(
+                GraphEdge(
+                    source=graph_nodes[0].id,
+                    target=graph_nodes[1].id,
+                    relation="interactsWith",
+                )
+            )
+
+        if len(graph_nodes) >= 3:
+            rel_2 = Triplet(
+                subject=f"https://smartbrief.ai/concept/{_slugify(raw_concepts[1]['name'])}",
+                predicate="https://smartbrief.ai/ontology/enables",
+                object=f"https://smartbrief.ai/concept/{_slugify(raw_concepts[2]['name'])}",
+            )
+            oxigraph_store.add_triplet(rel_2)
+            graph_edges.append(
+                GraphEdge(
+                    source=graph_nodes[1].id,
+                    target=graph_nodes[2].id,
+                    relation="enables",
+                )
+            )
 
     # Query Oxigraph with SPARQL to demonstrate embedded query capability
     sparql_query = "SELECT ?s ?p ?o WHERE { ?s ?p ?o } LIMIT 10"
@@ -634,12 +766,18 @@ async def process_article(payload: ProcessRequest):
     sparql_sample = sparql_exec.get("bindings", []) if isinstance(sparql_exec, dict) else []
 
     # 4. Generate 3 Q&A Flashcards anchored to graph nodes
-    flashcards_raw = _generate_flashcards_data(raw_concepts, text)
     flashcard_objects: List[Flashcard] = []
 
-    for i, fc in enumerate(flashcards_raw):
+    for i, fc in enumerate(raw_flashcards):
         fc_id = f"flashcard_{session_id}_{i+1}"
-        concept_node = graph_nodes[i] if i < len(graph_nodes) else graph_nodes[0]
+        
+        # Match flashcard to its target concept node
+        target_name = fc.get("target_concept", fc.get("concept_name", "")).lower()
+        matched_node = next(
+            (n for n in graph_nodes if target_name and (target_name in n.label.lower() or n.label.lower() in target_name)),
+            None,
+        )
+        concept_node = matched_node if matched_node else (graph_nodes[i] if i < len(graph_nodes) else graph_nodes[0])
         concept_node_id = concept_node.id
 
         now_iso = datetime.now(timezone.utc).isoformat()
@@ -652,6 +790,7 @@ async def process_article(payload: ProcessRequest):
                 "question": fc["question"],
                 "target_concept": concept_node_id,
                 "derivation": "PROV_O_DERIVED_FROM",
+                "agent": agent_name,
             },
         )
 
@@ -664,8 +803,10 @@ async def process_article(payload: ProcessRequest):
         # Compute tamper-evident checksum
         checksum_content = f"{fc_id}|{concept_node_id}|{fc['question']}|{fc['answer']}"
         checksum = hashlib.sha256(checksum_content.encode("utf-8")).hexdigest()
+        
+        excerpt = fc.get("source_excerpt") or f"Extracted concept '{concept_node.label}': {concept_node.description}"
         audit_steps = [
-            f"1. Tokenized document and mapped entity to concept '{concept_node.label}'",
+            f"1. Extracted concept '{concept_node.label}' using {agent_name}",
             f"2. Asserted RDF triples in embedded Oxigraph store ({concept_node_id})",
             f"3. Derived Q&A flashcard using Semantica Provenance Manager audit trail",
         ]
@@ -674,18 +815,18 @@ async def process_article(payload: ProcessRequest):
             entity_id=fc_id,
             node_id=concept_node_id,
             source_node=concept_node_id,
-            source_excerpt=f"Extracted concept '{concept_node.label}': {concept_node.description}",
-            confidence=1.0,
+            source_excerpt=excerpt,
+            confidence=0.98 if is_llm else 1.0,
             audit_trail=audit_steps,
             source_document="article_input",
-            agent="Semantica PROV-O Engine",
-            activity="Flashcard Generation & Context Synthesis",
+            agent=agent_name,
+            activity="LLM Knowledge Synthesis & Flashcard Generation" if is_llm else "Flashcard Generation & Context Synthesis",
             timestamp=now_iso,
             checksum=checksum,
             w3c_prov=W3CProvMetadata(
                 wasDerivedFrom=f"urn:smartbrief:concept:{concept_node.id}",
                 wasGeneratedBy=f"urn:smartbrief:activity:synthesis_{session_id}",
-                wasAttributedTo="urn:smartbrief:agent:semantica_agi",
+                wasAttributedTo="urn:smartbrief:agent:openai:gpt-4o-mini" if is_llm else "urn:smartbrief:agent:semantica_agi",
             ),
             lineage_chain=lineage_entries,
         )
@@ -715,7 +856,7 @@ async def process_article(payload: ProcessRequest):
         flashcards=flashcard_objects,
         provenance_summary=ProvenanceSummary(
             total_entities_tracked=len(flashcard_objects) + len(graph_nodes),
-            storage_backend="Semantica Oxigraph Embedded + Provenance SQLite",
+            storage_backend="Semantica Oxigraph Embedded + OpenAI gpt-4o-mini + SQLite" if is_llm else "Semantica Oxigraph Embedded + Provenance SQLite",
             provenance_standard="W3C PROV-O (Provenance Ontology)",
             session_id=session_id,
         ),
@@ -740,3 +881,4 @@ async def get_entity_provenance(entity_id: str):
             detail=f"Provenance not found for entity ID: {entity_id}",
         )
     return lineage
+
