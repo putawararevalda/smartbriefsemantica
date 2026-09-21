@@ -157,7 +157,12 @@ export default function IngestionHub({
             id={textareaId}
             rows={9}
             value={text}
-            onChange={(e) => setText(e.target.value)}
+            onChange={(e) => {
+              setText(e.target.value);
+              if (selectedSampleId) {
+                onSelectSampleId?.(null as any);
+              }
+            }}
             onKeyDown={handleKeyDown}
             disabled={isLoading}
             placeholder="Paste your article or long-form research text here (or select a curated domain above)..."
