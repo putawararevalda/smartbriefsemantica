@@ -319,28 +319,33 @@ export default function FlashcardDeck({
 
       {/* 3D Flip Card Container */}
       <div
-        className="perspective-1000 w-full relative min-h-[420px] sm:min-h-[450px]"
+        className="perspective-1000 w-full relative h-[480px] sm:h-[500px] min-h-[480px] sm:min-h-[500px]"
         ref={cardRef}
         tabIndex={0}
         role="region"
         aria-label={`Flashcard ${currentIndex + 1} of ${totalCards}. Press Space to flip.`}
+        style={{
+          minHeight: '480px',
+        }}
       >
         <div
-          className={`w-full h-full relative transition-transform duration-500 transform-style-3d ${
+          className={`w-full h-full min-h-[480px] sm:min-h-[500px] relative transition-transform duration-500 transform-style-3d ${
             isFlipped ? 'rotate-y-180' : ''
           }`}
           style={{
             transform: isFlipped ? 'rotateY(180deg)' : 'rotateY(0deg)',
             transformStyle: 'preserve-3d',
             transition: 'transform 0.5s cubic-bezier(0.4, 0, 0.2, 1)',
+            minHeight: '480px',
           }}
         >
           {/* ================= FRONT FACE (Question) ================= */}
           <div
-            className="w-full h-full absolute inset-0 backface-hidden rounded-2xl bg-white border border-slate-200/90 shadow-sm p-6 sm:p-7 flex flex-col justify-between overflow-y-auto"
+            className="w-full h-full min-h-[480px] sm:min-h-[500px] absolute inset-0 backface-hidden rounded-2xl bg-white border border-slate-200/90 shadow-sm p-6 sm:p-7 flex flex-col justify-between overflow-y-auto"
             style={{
               backfaceVisibility: 'hidden',
               WebkitBackfaceVisibility: 'hidden',
+              minHeight: '480px',
             }}
           >
             {/* Front Header */}
@@ -411,11 +416,12 @@ export default function FlashcardDeck({
 
           {/* ================= BACK FACE (Answer + Grading) ================= */}
           <div
-            className="w-full h-full absolute inset-0 backface-hidden rounded-2xl bg-white border border-slate-200/90 shadow-sm p-6 sm:p-7 flex flex-col justify-between overflow-y-auto rotate-y-180"
+            className="w-full h-full min-h-[480px] sm:min-h-[500px] absolute inset-0 backface-hidden rounded-2xl bg-white border border-slate-200/90 shadow-sm p-6 sm:p-7 flex flex-col justify-between overflow-y-auto rotate-y-180"
             style={{
               backfaceVisibility: 'hidden',
               WebkitBackfaceVisibility: 'hidden',
               transform: 'rotateY(180deg)',
+              minHeight: '480px',
             }}
           >
             {/* Back Header */}
