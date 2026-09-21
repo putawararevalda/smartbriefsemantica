@@ -109,4 +109,22 @@ test('SMAR-10: Flashcards and Concepts badges & tabs clickability verification',
     assert.match(src, /mentionsHighlightedConcept|isConceptMatch|activeHighlight/,
       'Left pane reader must highlight active concept in source text');
   });
+
+  await t.test('FlashcardDeck specifies explicit height and min-height to prevent vertical collapse', () => {
+    const flashcardDeckFile = path.join(frontendDir, 'src/components/FlashcardDeck.tsx');
+    assert.ok(fs.existsSync(flashcardDeckFile), 'FlashcardDeck.tsx must exist');
+    const deckSrc = fs.readFileSync(flashcardDeckFile, 'utf8');
+
+    // Container specifies explicit responsive height and min-height
+    assert.match(deckSrc, /h-\[480px\]\s+sm:h-\[500px\]\s+min-h-\[480px\]\s+sm:min-h-\[500px\]/,
+      '3D card container must specify explicit responsive height (480px/500px) and min-height');
+
+    // Flipper specifies min-height and height
+    assert.match(deckSrc, /min-h-\[480px\]\s+sm:min-h-\[500px\]/,
+      '3D flipper element must define min-height');
+
+    // Faces specify min-height
+    assert.match(deckSrc, /minHeight:\s*'480px'/,
+      'Card faces must specify explicit minHeight inline style');
+  });
 });
