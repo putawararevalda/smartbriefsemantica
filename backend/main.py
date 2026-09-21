@@ -283,8 +283,115 @@ def _extract_key_concepts(text: str) -> List[Dict[str, str]]:
                 )
                 break
 
+    # If fewer than 3 concepts found, dynamically extract salient entities from the source text
+    if len(found_concepts) < 3:
+        stop_words = {
+            'the', 'this', 'that', 'these', 'those', 'in', 'on', 'at', 'to', 'for',
+            'with', 'from', 'by', 'about', 'as', 'into', 'through', 'during',
+            'before', 'after', 'above', 'below', 'under', 'between', 'among', 'a',
+            'an', 'and', 'but', 'or', 'nor', 'so', 'yet', 'however', 'therefore',
+            'moreover', 'furthermore', 'although', 'though', 'while', 'whereas',
+            'if', 'unless', 'since', 'because', 'why', 'what', 'how', 'when',
+            'where', 'who', 'which', 'it', 'its', 'they', 'their', 'we', 'our',
+            'of', 'is', 'are', 'was', 'were', 'be', 'been', 'being', 'have', 'has', 'had',
+            'do', 'does', 'did', 'can', 'could', 'should', 'would', 'will', 'may', 'might', 'must',
+            'all', 'each', 'every', 'both', 'few', 'more', 'most', 'other', 'some', 'such'
+        }
+
+        def _clean_words(words):
+            while words and words[0].lower() in stop_words:
+                words.pop(0)
+            while words and words[-1].lower() in stop_words:
+                words.pop()
+            return words
+
+        existing_names = {c["name"].lower() for c in found_concepts}
+
+        def _is_overlap(term):
+            t = term.lower()
+            if t in existing_names:
+                return True
+            for s in existing_names:
+                if t in s or s in t:
+                    return True
+            return False
+
+        raw_lines = [line.strip() for line in text.split('\n') if line.strip()]
+        has_header = False
+        header_candidate = ''
+        if raw_lines and (raw_lines[0].startswith('#') or (len(raw_lines[0].split()) <= 8 and not raw_lines[0].endswith('.'))):
+            has_header = True
+            header_candidate = re.sub(r'^[#\s*_-]+', '', raw_lines[0]).strip()
+
+        body_lines = raw_lines[1:] if has_header else raw_lines
+        sentences = []
+        for line in body_lines:
+            for s in re.split(r'(?<=[.!?])\s+', line):
+                s_clean = s.strip()
+                if len(s_clean) > 15:
+                    sentences.append(s_clean)
+
+        # 1. Primary Subject from Header/Title if available
+        if header_candidate and len(found_concepts) < 3:
+            parts = [p.strip() for p in re.split(r'[:–—]', header_candidate) if 2 < len(p.strip()) < 40]
+            p = parts[0] if parts else header_candidate
+            words = _clean_words(p.split())
+            if words and 1 <= len(words) <= 4:
+                clean_p = ' '.join(words)
+                if not _is_overlap(clean_p) and len(clean_p) >= 3:
+                    best_s = next((s for s in sentences if clean_p.lower() in s.lower()), sentences[0] if sentences else header_candidate)
+                    found_concepts.append({
+                        "name": clean_p,
+                        "category": "Primary Subject",
+                        "description": best_s[:240].strip() + ('.' if not best_s.strip().endswith('.') else ''),
+                    })
+                    existing_names.add(clean_p.lower())
+                    if parts and len(parts) > 1:
+                        sub_p = ' '.join(_clean_words(parts[1].split()))
+                        existing_names.add(sub_p.lower())
+
+        # 2. Capitalized Multi-word Phrases (Entities / Concepts)
+        phrase_pattern = re.compile(
+            r'\b(?:[A-Z][a-zA-Z0-9]*(?:[\'\’][a-zA-Z]+)?(?:\s+(?:de|du|of|the|and|for|in|on)\s+|\s+)){1,3}[A-Z][a-zA-Z0-9]*(?:[\'\’][a-zA-Z]+)?\b'
+        )
+        for s in sentences:
+            if len(found_concepts) >= 3:
+                break
+            for match in phrase_pattern.finditer(s):
+                words = _clean_words(match.group().strip().split())
+                if len(words) >= 2:
+                    clean_phrase = ' '.join(words)
+                    if not _is_overlap(clean_phrase) and len(clean_phrase) >= 4:
+                        found_concepts.append({
+                            "name": clean_phrase,
+                            "category": "Key Concept",
+                            "description": s[:240].strip() + ('.' if not s.strip().endswith('.') else ''),
+                        })
+                        existing_names.add(clean_phrase.lower())
+                        if len(found_concepts) >= 3:
+                            break
+
+        # 3. Domain Acronyms (e.g. FIA, F1, WDC, DNA, etc.)
+        if len(found_concepts) < 3:
+            acronym_pattern = re.compile(r'\b[A-Z]{2,6}\b')
+            for s in sentences:
+                if len(found_concepts) >= 3:
+                    break
+                for match in acronym_pattern.finditer(s):
+                    acro = match.group().strip()
+                    if acro.lower() not in stop_words and len(acro) >= 2:
+                        if not _is_overlap(acro):
+                            found_concepts.append({
+                                "name": acro,
+                                "category": "Domain Entity",
+                                "description": s[:240].strip() + ('.' if not s.strip().endswith('.') else ''),
+                            })
+                            existing_names.add(acro.lower())
+                            if len(found_concepts) >= 3:
+                                break
+
     # If fewer than 3 concepts found, supplement with top domain concepts
-    fallback_pool = [c for c in candidate_dict if c not in found_concepts]
+    fallback_pool = [c for c in candidate_dict if c["name"].lower() not in {fc["name"].lower() for fc in found_concepts}]
     while len(found_concepts) < 3 and fallback_pool:
         found_concepts.append(fallback_pool.pop(0))
 
@@ -345,11 +452,19 @@ def _generate_flashcards_data(
                 }
             )
         else:
+            cat = c.get("category", "Key Concept")
+            if cat == "Primary Subject":
+                q = f"What is {c['name']} according to the document?"
+            elif "Entity" in cat or "Acronym" in cat:
+                q = f"What role does {c['name']} play in this context?"
+            else:
+                q = f"How does the text describe or characterize {c['name']}?"
+
             result.append(
                 {
                     "concept_name": c["name"],
-                    "question": f"What significance does '{c['name']}' hold in the context of this document?",
-                    "answer": f"{c['name']} ({c['category']}) represents {c['description']} and was extracted as a foundational concept in the source text.",
+                    "question": q,
+                    "answer": c["description"],
                 }
             )
 

@@ -127,4 +127,44 @@ test('SMAR-10: Flashcards and Concepts badges & tabs clickability verification',
     assert.match(deckSrc, /minHeight:\s*'480px'/,
       'Card faces must specify explicit minHeight inline style');
   });
+
+  await t.test('Custom text dynamically updates documentTitle and resets sample selection', () => {
+    const pageFile = path.join(frontendDir, 'src/app/page.tsx');
+    const ingestionHubFile = path.join(frontendDir, 'src/components/IngestionHub.tsx');
+    assert.ok(fs.existsSync(pageFile), 'page.tsx must exist');
+    assert.ok(fs.existsSync(ingestionHubFile), 'IngestionHub.tsx must exist');
+
+    const pageSrc = fs.readFileSync(pageFile, 'utf8');
+    const hubSrc = fs.readFileSync(ingestionHubFile, 'utf8');
+
+    // IngestionHub clears sample selection when typing/pasting custom text
+    assert.match(hubSrc, /onSelectSampleId\?.\(null/,
+      'IngestionHub must reset selectedSampleId when user enters custom text');
+
+    // page.tsx dynamically derives documentTitle from custom text heading or line 1
+    assert.match(pageSrc, /firstLine\s*=\s*trimmed\.split\('\\n'\)\[0\]/,
+      'page.tsx must extract documentTitle from first line of custom text');
+  });
+
+  await t.test('API dynamically extracts concepts and flashcards for custom domain text', async () => {
+    const customText = 'Formula 1: The Pinnacle of Motorsport\nFormula 1 (F1) is the highest class of international racing for open-wheel single-seater formula racing cars, sanctioned by the Fédération Internationale de l Automobile (FIA). Regarded as the pinnacle of motorsport, the F1 World Championship is one of the most watched sporting events globally, featuring a calendar of races known as Grands Prix held on purpose-built circuits and closed public roads across the world.';
+
+    const res = await fetch('http://localhost:3003/api/process', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: customText }),
+    });
+
+    assert.equal(res.status, 200, 'POST /api/process must succeed for custom text');
+    const data = await res.json();
+
+    assert.ok(Array.isArray(data.concepts), 'concepts must be an array');
+    assert.ok(Array.isArray(data.flashcards), 'flashcards must be an array');
+
+    // Ensure flashcards are tailored to Formula 1, not default Oxigraph mock
+    const questions = data.flashcards.map(f => f.question).join(' ');
+    assert.match(questions, /Formula 1|F1|Grands Prix|Pinnacle/i,
+      'Flashcards must be dynamically generated from custom input text');
+  });
 });
+

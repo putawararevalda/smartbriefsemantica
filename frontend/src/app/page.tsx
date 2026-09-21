@@ -205,7 +205,21 @@ export default function Home() {
               result={result}
               onNewArticle={() => setResult(null)}
               onTraceSource={(card) => setSelectedCardForTrace(card)}
-              documentTitle={selectedSampleId ? CURATED_SAMPLES.find(s => s.id === selectedSampleId)?.title : undefined}
+              documentTitle={(() => {
+                if (selectedSampleId) {
+                  const sample = CURATED_SAMPLES.find((s) => s.id === selectedSampleId);
+                  if (sample && text.trim() === sample.content.trim()) {
+                    return sample.title;
+                  }
+                }
+                const trimmed = text.trim();
+                if (!trimmed) return 'Source Document';
+                const firstLine = trimmed.split('\n')[0].replace(/^[#\s*_-]+/, '').trim();
+                if (firstLine && firstLine.length <= 100) {
+                  return firstLine;
+                }
+                return 'Custom Document';
+              })()}
             />
           </section>
         )}
