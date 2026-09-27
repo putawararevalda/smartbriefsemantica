@@ -42,7 +42,7 @@ def test_process_article_success(client):
 
     # AC4: Graph concepts
     assert "concepts" in data
-    assert len(data["concepts"]) == 3
+    assert len(data["concepts"]) >= 3
     for c in data["concepts"]:
         assert "id" in c
         assert "name" in c
@@ -51,13 +51,13 @@ def test_process_article_success(client):
 
     # AC4: Graph structure
     assert "graph" in data
-    assert len(data["graph"]["nodes"]) == 3
+    assert len(data["graph"]["nodes"]) >= 3
     assert len(data["graph"]["edges"]) >= 1
     assert data["graph"]["triplet_count"] > 0
 
-    # AC2 & AC3: 3 interactive Q&A flashcards with provenance
+    # AC2 & AC3: 3 to 5 interactive Q&A flashcards with provenance
     assert "flashcards" in data
-    assert len(data["flashcards"]) == 3
+    assert 3 <= len(data["flashcards"]) <= 5
 
     for card in data["flashcards"]:
         assert "id" in card

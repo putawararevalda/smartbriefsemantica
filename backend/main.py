@@ -513,10 +513,11 @@ def _generate_flashcards_data(
     ]
 
     result = []
+    is_semantica_doc = "semantica" in text_context.lower() or "oxigraph" in text_context.lower()
     for idx, c in enumerate(concepts):
-        # Match template or create tailored Q&A
+        # Match template only for Semantica/Oxigraph docs, or create tailored Q&A
         matched = next(
-            (t for t in flashcards_templates if t["concept_name"].lower() == c["name"].lower()),
+            (t for t in flashcards_templates if is_semantica_doc and t["concept_name"].lower() == c["name"].lower()),
             None,
         )
         if matched:
@@ -540,39 +541,42 @@ def _generate_flashcards_data(
                 {
                     "concept_name": c["name"],
                     "question": q,
-                    "answer": c["description"],
+                    "answer": c.get("description", f"{c['name']} is a primary concept discussed in the text."),
                 }
             )
 
-    return result[:3]
+    return result[:5]
 
 
 def _extract_with_openai(text: str, model: str = "gpt-4o-mini") -> Optional[Dict[str, Any]]:
-    """Extract summary, structured knowledge graph concepts, triplets, and flashcards using OpenAI."""
+    """Extract summary, structured knowledge graph concepts (6-12 entities), triplets, and 3-5 flashcards using OpenAI via direct HTTPS."""
     api_key = os.environ.get("OPENAI_API_KEY", "").strip()
     if not api_key:
         return None
     try:
-        from openai import OpenAI
-        client = OpenAI(api_key=api_key)
+        import requests
         sys_prompt = (
-            "You are an expert knowledge engineer and pedagogical learning assistant. "
-            "Analyze the given text to extract a structured knowledge graph and active recall flashcards. "
+            "You are an expert knowledge graph engineer and pedagogical learning assistant. "
+            "Analyze the given text to extract a comprehensive domain knowledge graph and high-yield active recall flashcards.\n\n"
+            "Requirements:\n"
+            "1. Knowledge Graph Entities ('concepts'): Extract 6 to 12 distinct key concepts, entities, organizations, regulations, championships, or technologies mentioned across the ENTIRE text.\n"
+            "2. Semantic Triplets ('triplets'): Extract formal semantic relationship triplets connecting these concepts across the text (subject, predicate, object).\n"
+            "3. Active Recall Flashcards ('flashcards'): Generate 3 to 5 targeted active recall questions and concise answers testing understanding of the most crucial concepts in the text.\n\n"
             "You MUST return ONLY a JSON object with this exact structure:\n"
             "{\n"
             '  "summary": "Concise executive summary of the document (2-3 sentences).",\n'
             '  "concepts": [\n'
             '    {\n'
             '      "name": "Concept Name",\n'
-            '      "category": "Category or Entity Type (e.g. Quantum Architecture, Economics, Biology)",\n'
+            '      "category": "Category or Entity Type (e.g. Motorsport Championship, Governing Body, Technology, Biology)",\n'
             '      "description": "Clear, informative explanation of this concept based on the text."\n'
             '    }\n'
             '  ],\n'
             '  "triplets": [\n'
             '    {\n'
-            '      "subject": "Concept 1",\n'
-            '      "predicate": "relation (e.g. utilizes, implements, demonstrates, regulates, causes)",\n'
-            '      "object": "Concept 2"\n'
+            '      "subject": "Concept Name 1",\n'
+            '      "predicate": "relation (e.g. sanctionedBy, competesIn, utilizes, regulates, causes)",\n'
+            '      "object": "Concept Name 2"\n'
             '    }\n'
             '  ],\n'
             '  "flashcards": [\n'
@@ -584,24 +588,36 @@ def _extract_with_openai(text: str, model: str = "gpt-4o-mini") -> Optional[Dict
             '    }\n'
             '  ]\n'
             "}\n"
-            "Constraints:\n"
-            "- Exactly 3 concepts in 'concepts'.\n"
-            "- At least 2 semantic triplets in 'triplets' connecting these concepts.\n"
-            "- Exactly 3 flashcards in 'flashcards', each targeting one of the extracted concepts.\n"
-            "- Ground everything directly in the provided text."
+            "Ground everything directly and faithfully in the provided text."
         )
 
-        resp = client.chat.completions.create(
-            model=model,
-            messages=[
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        }
+        payload = {
+            "model": model,
+            "messages": [
                 {"role": "system", "content": sys_prompt},
                 {"role": "user", "content": f"Document text:\n\n{text}"}
             ],
-            response_format={"type": "json_object"},
-            temperature=0.2,
-            max_tokens=1500,
+            "response_format": {"type": "json_object"},
+            "temperature": 0.2,
+            "max_tokens": 2500,
+        }
+
+        resp = requests.post(
+            "https://api.openai.com/v1/chat/completions",
+            headers=headers,
+            json=payload,
+            timeout=30,
         )
-        content = resp.choices[0].message.content
+        if resp.status_code != 200:
+            print(f"[OpenAI Extraction Error HTTP {resp.status_code}] {resp.text}")
+            return None
+
+        result_data = resp.json()
+        content = result_data["choices"][0]["message"]["content"]
         if not content:
             return None
         data = json.loads(content)
@@ -678,9 +694,9 @@ async def process_article(payload: ProcessRequest):
 
     if is_llm:
         summary = llm_data.get("summary") or _extract_summary(text)
-        raw_concepts = llm_data.get("concepts")[:3]
+        raw_concepts = llm_data.get("concepts", [])[:12]
         raw_triplets = llm_data.get("triplets", [])
-        raw_flashcards = llm_data.get("flashcards", [])[:3]
+        raw_flashcards = llm_data.get("flashcards", [])[:5]
         agent_name = "OpenAI GPT-4o-mini + Semantica PROV-O"
     else:
         summary = _extract_summary(text)
@@ -755,6 +771,7 @@ async def process_article(payload: ProcessRequest):
     # 3. Create interconnecting semantic edges between extracted concepts
     # If LLM extracted triplets, store in Oxigraph and populate graph_edges
     if raw_triplets:
+        existing_node_ids = {n.id for n in graph_nodes}
         for t in raw_triplets:
             subj_name = t.get("subject", "").strip()
             pred_name = t.get("predicate", "relatedTo").strip()
@@ -763,6 +780,35 @@ async def process_article(payload: ProcessRequest):
                 subj_slug = _slugify(subj_name)
                 obj_slug = _slugify(obj_name)
                 pred_slug = _slugify(pred_name)
+
+                # Ensure both subject and object exist as graph nodes
+                for ent_name, ent_slug in [(subj_name, subj_slug), (obj_name, obj_slug)]:
+                    ent_node_id = f"concept:{ent_slug}"
+                    if ent_node_id not in existing_node_ids:
+                        graph_nodes.append(
+                            GraphNode(
+                                id=ent_node_id,
+                                label=ent_name,
+                                type="Entity",
+                                description=f"Extracted domain entity: {ent_name}",
+                            )
+                        )
+                        oxigraph_store.add_triplet(
+                            Triplet(
+                                subject=f"https://smartbrief.ai/concept/{ent_slug}",
+                                predicate="http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+                                object="https://smartbrief.ai/ontology/Entity",
+                            )
+                        )
+                        oxigraph_store.add_triplet(
+                            Triplet(
+                                subject=f"https://smartbrief.ai/concept/{ent_slug}",
+                                predicate="https://smartbrief.ai/ontology/extractedFrom",
+                                object=doc_id,
+                            )
+                        )
+                        existing_node_ids.add(ent_node_id)
+
                 rel_triplet = Triplet(
                     subject=f"https://smartbrief.ai/concept/{subj_slug}",
                     predicate=f"https://smartbrief.ai/ontology/{pred_slug}",
