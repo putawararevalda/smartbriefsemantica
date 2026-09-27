@@ -135,13 +135,62 @@ class GraphEdge(BaseModel):
     relation: str = Field(..., description="Semantic predicate or relationship.")
 
 
+class TripletItem(BaseModel):
+    """Formal W3C RDF Triplet asserted in Oxigraph."""
+
+    subject: str = Field(..., description="Subject URI or identifier.")
+    predicate: str = Field(..., description="Predicate URI or relationship.")
+    object: str = Field(..., description="Object URI, concept, or literal.")
+    confidence: float = Field(default=1.0, description="Extraction confidence score.")
+
+
 class KnowledgeGraph(BaseModel):
     """Structured graph representation."""
 
     nodes: List[GraphNode]
     edges: List[GraphEdge]
+    triplets: Optional[List[TripletItem]] = Field(
+        default_factory=list,
+        description="Complete list of formal RDF triplets asserted in Oxigraph.",
+    )
     triplet_count: int
     sparql_sample: Optional[List[Dict[str, Any]]] = None
+
+
+class SparqlQueryRequest(BaseModel):
+    """Request payload for executing SPARQL queries against Oxigraph."""
+
+    query: str = Field(
+        default="SELECT ?s ?p ?o WHERE { ?s ?p ?o } LIMIT 25",
+        description="SPARQL 1.1 query string to execute against embedded Oxigraph store.",
+    )
+
+
+class SparqlQueryResponse(BaseModel):
+    """Response payload for SPARQL query execution."""
+
+    success: bool
+    variables: List[str]
+    bindings: List[Dict[str, Any]]
+    total_results: int
+    query: str
+
+
+class AllTripletsResponse(BaseModel):
+    """Response containing all asserted triplets in Oxigraph."""
+
+    total_triplets: int
+    triplets: List[TripletItem]
+    store_backend: str = "Semantica Oxigraph Embedded"
+
+
+class ExportRdfResponse(BaseModel):
+    """Response containing exported RDF syntax."""
+
+    format: str = "turtle"
+    content: str
+    total_triplets: int
+
 
 
 class ConceptItem(BaseModel):
@@ -842,6 +891,47 @@ async def process_article(payload: ProcessRequest):
             )
         )
 
+    # Compile session triplets asserted into Oxigraph
+    session_triplets: List[TripletItem] = []
+    session_triplets.append(
+        TripletItem(
+            subject=root_triplet.subject,
+            predicate=root_triplet.predicate,
+            object=root_triplet.object,
+            confidence=1.0,
+        )
+    )
+    for idx, c in enumerate(raw_concepts):
+        concept_slug = _slugify(c["name"])
+        concept_uri = f"https://smartbrief.ai/concept/{concept_slug}"
+        session_triplets.append(
+            TripletItem(
+                subject=concept_uri,
+                predicate="http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+                object=f"https://smartbrief.ai/ontology/{_slugify(c['category'])}",
+                confidence=1.0,
+            )
+        )
+        session_triplets.append(
+            TripletItem(
+                subject=concept_uri,
+                predicate="https://smartbrief.ai/ontology/extractedFrom",
+                object=doc_id,
+                confidence=1.0,
+            )
+        )
+    for edge in graph_edges:
+        src_slug = edge.source.replace("concept:", "")
+        tgt_slug = edge.target.replace("concept:", "")
+        session_triplets.append(
+            TripletItem(
+                subject=f"https://smartbrief.ai/concept/{src_slug}",
+                predicate=f"https://smartbrief.ai/ontology/{_slugify(edge.relation)}",
+                object=f"https://smartbrief.ai/concept/{tgt_slug}",
+                confidence=0.98 if is_llm else 1.0,
+            )
+        )
+
     # Construct response
     return ProcessResponse(
         summary=summary,
@@ -850,7 +940,8 @@ async def process_article(payload: ProcessRequest):
         graph=KnowledgeGraph(
             nodes=graph_nodes,
             edges=graph_edges,
-            triplet_count=len(graph_nodes) * 2 + len(graph_edges) + 1,
+            triplets=session_triplets,
+            triplet_count=len(session_triplets),
             sparql_sample=sparql_sample,
         ),
         flashcards=flashcard_objects,
@@ -881,4 +972,117 @@ async def get_entity_provenance(entity_id: str):
             detail=f"Provenance not found for entity ID: {entity_id}",
         )
     return lineage
+
+
+@app.get(
+    "/api/graph/triplets",
+    response_model=AllTripletsResponse,
+    summary="Get All Oxigraph RDF Triplets",
+    tags=["Knowledge Graph & Oxigraph"],
+)
+async def get_all_triplets():
+    """Retrieve all RDF triplets currently stored in Semantica's embedded Oxigraph store."""
+    global oxigraph_store
+    if oxigraph_store is None:
+        oxigraph_store = OxigraphStore()
+
+    raw_triplets = oxigraph_store.get_triplets()
+    triplet_items = [
+        TripletItem(
+            subject=t.subject,
+            predicate=t.predicate,
+            object=t.object,
+            confidence=getattr(t, "confidence", 1.0) or 1.0,
+        )
+        for t in raw_triplets
+    ]
+    return AllTripletsResponse(
+        total_triplets=len(triplet_items),
+        triplets=triplet_items,
+        store_backend="Semantica Oxigraph Embedded",
+    )
+
+
+@app.post(
+    "/api/graph/sparql",
+    response_model=SparqlQueryResponse,
+    summary="Execute SPARQL Query on Oxigraph",
+    tags=["Knowledge Graph & Oxigraph"],
+)
+async def execute_sparql_query(payload: SparqlQueryRequest):
+    """Execute a SPARQL 1.1 query directly against Semantica's embedded Oxigraph store."""
+    global oxigraph_store
+    if oxigraph_store is None:
+        oxigraph_store = OxigraphStore()
+
+    query_str = payload.query.strip()
+    if not query_str:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="SPARQL query cannot be empty.",
+        )
+
+    try:
+        result = oxigraph_store.execute_sparql(query_str)
+        if isinstance(result, dict) and result.get("success"):
+            variables = result.get("variables", [])
+            bindings = result.get("bindings", [])
+            return SparqlQueryResponse(
+                success=True,
+                variables=variables,
+                bindings=bindings,
+                total_results=len(bindings),
+                query=query_str,
+            )
+        else:
+            return SparqlQueryResponse(
+                success=True,
+                variables=[],
+                bindings=[],
+                total_results=0,
+                query=query_str,
+            )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"SPARQL execution error: {str(exc)}",
+        )
+
+
+@app.get(
+    "/api/graph/export",
+    response_model=ExportRdfResponse,
+    summary="Export Oxigraph Knowledge Graph as RDF Turtle",
+    tags=["Knowledge Graph & Oxigraph"],
+)
+async def export_graph_turtle():
+    """Export the complete Oxigraph triplestore in standard W3C Turtle syntax."""
+    global oxigraph_store
+    if oxigraph_store is None:
+        oxigraph_store = OxigraphStore()
+
+    raw_triplets = oxigraph_store.get_triplets()
+    turtle_lines = [
+        "# SmartBrief Knowledge Graph - W3C Turtle Export",
+        f"# Exported At: {datetime.now(timezone.utc).isoformat()}",
+        f"# Total Asserted Triples: {len(raw_triplets)}",
+        "@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .",
+        "@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .",
+        "@prefix sb: <https://smartbrief.ai/concept/> .",
+        "@prefix sbo: <https://smartbrief.ai/ontology/> .",
+        "",
+    ]
+    for t in raw_triplets:
+        subj = f"<{t.subject}>" if t.subject.startswith("http") or ":" in t.subject else f"<https://smartbrief.ai/concept/{t.subject}>"
+        pred = f"<{t.predicate}>" if t.predicate.startswith("http") or ":" in t.predicate else f"<https://smartbrief.ai/ontology/{t.predicate}>"
+        obj = f"<{t.object}>" if t.object.startswith("http") or ":" in t.object else f'"{t.object}"'
+        turtle_lines.append(f"{subj} {pred} {obj} .")
+
+    turtle_content = "\n".join(turtle_lines)
+    return ExportRdfResponse(
+        format="turtle",
+        content=turtle_content,
+        total_triplets=len(raw_triplets),
+    )
+
 

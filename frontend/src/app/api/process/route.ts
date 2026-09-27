@@ -30,6 +30,23 @@ function getFallbackResponse(text: string): ProcessResponse {
         relations: ["originates:urn:semantica:concept:1"]
       }
     ],
+    graph: {
+      nodes: [
+        { id: "urn:semantica:concept:1", label: "Semantic Knowledge Representation", type: "CoreConcept", description: "Foundational ontology node captured in embedded Oxigraph store." },
+        { id: "urn:semantica:concept:2", label: "Inference & Provenance Trail", type: "AuditEntity", description: "Deterministic lineage tracking decision paths across semantic triples." },
+        { id: "urn:semantica:concept:3", label: "Autonomous Extraction Engine", type: "ProcessModule", description: "Extraction agent mapping unstructured text into structured RDF assertions." }
+      ],
+      edges: [
+        { source: "urn:semantica:concept:1", target: "urn:semantica:concept:2", relation: "relates_to" },
+        { source: "urn:semantica:concept:3", target: "urn:semantica:concept:1", relation: "originates" }
+      ],
+      triplets: [
+        { subject: "https://smartbrief.ai/concept/semantic-knowledge-representation", predicate: "http://www.w3.org/1999/02/22-rdf-syntax-ns#type", object: "https://smartbrief.ai/ontology/core-concept", confidence: 1.0 },
+        { subject: "https://smartbrief.ai/concept/inference-and-provenance-trail", predicate: "https://smartbrief.ai/ontology/verifies", object: "https://smartbrief.ai/concept/semantic-knowledge-representation", confidence: 0.98 },
+        { subject: "https://smartbrief.ai/concept/autonomous-extraction-engine", predicate: "https://smartbrief.ai/ontology/populates", object: "https://smartbrief.ai/concept/oxigraph-triplestore", confidence: 0.95 }
+      ],
+      triplet_count: 3
+    },
     flashcards: [
       {
         id: 1,

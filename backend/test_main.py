@@ -106,3 +106,61 @@ def test_provenance_lookup_endpoint(client):
     prov_data = prov_resp.json()
     assert "entity_id" in prov_data
     assert prov_data["entity_id"] == card_id
+
+
+def test_get_all_triplets_endpoint(client):
+    """Verify GET /api/graph/triplets returns all asserted Oxigraph RDF triples."""
+    # Process text to populate store
+    client.post(
+        "/api/process",
+        json={"text": "Quantum computing uses superposition in qubits to solve complex calculations."},
+    )
+    response = client.get("/api/graph/triplets")
+    assert response.status_code == 200
+    data = response.json()
+    assert "total_triplets" in data
+    assert "triplets" in data
+    assert data["total_triplets"] > 0
+    assert len(data["triplets"]) > 0
+    for t in data["triplets"]:
+        assert "subject" in t
+        assert "predicate" in t
+        assert "object" in t
+
+
+def test_sparql_query_endpoint(client):
+    """Verify POST /api/graph/sparql executes SPARQL against Oxigraph and returns bindings."""
+    # Ensure store has data
+    client.post(
+        "/api/process",
+        json={"text": "Molecular biology and genetics: exons and introns in RNA splicing."},
+    )
+    sparql_query = "SELECT ?s ?p ?o WHERE { ?s ?p ?o } LIMIT 10"
+    response = client.post("/api/graph/sparql", json={"query": sparql_query})
+    assert response.status_code == 200
+    data = response.json()
+    assert data["success"] is True
+    assert "variables" in data
+    assert "bindings" in data
+    assert isinstance(data["bindings"], list)
+    assert data["total_results"] >= 0
+
+
+def test_sparql_query_invalid(client):
+    """Verify POST /api/graph/sparql rejects invalid query with 400."""
+    response = client.post("/api/graph/sparql", json={"query": "THIS IS INVALID SYNTAX"})
+    assert response.status_code == 400
+    data = response.json()
+    assert "detail" in data
+
+
+def test_export_graph_turtle_endpoint(client):
+    """Verify GET /api/graph/export returns valid Turtle RDF string."""
+    response = client.get("/api/graph/export")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["format"] == "turtle"
+    assert "content" in data
+    assert "@prefix" in data["content"]
+    assert "total_triplets" in data
+

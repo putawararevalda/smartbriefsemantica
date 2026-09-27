@@ -17,6 +17,8 @@ export interface Flashcard {
   answer: string;
   provenance: ProvenanceData | string | Record<string, any>;
   category?: string;
+  concept_id?: string;
+  concept_name?: string;
 }
 
 export interface GraphConcept {
@@ -29,12 +31,65 @@ export interface GraphConcept {
   [key: string]: any;
 }
 
+export interface GraphNode {
+  id: string;
+  label: string;
+  type?: string;
+  description?: string;
+}
+
+export interface GraphEdge {
+  source: string;
+  target: string;
+  relation: string;
+}
+
+export interface TripletItem {
+  subject: string;
+  predicate: string;
+  object: string;
+  confidence?: number;
+}
+
+export interface KnowledgeGraph {
+  nodes: GraphNode[];
+  edges: GraphEdge[];
+  triplets?: TripletItem[];
+  triplet_count?: number;
+  sparql_sample?: Record<string, any>[];
+}
+
+export interface SparqlQueryRequest {
+  query: string;
+}
+
+export interface SparqlQueryResponse {
+  success: boolean;
+  variables: string[];
+  bindings: Record<string, any>[];
+  total_results: number;
+  query: string;
+}
+
+export interface AllTripletsResponse {
+  total_triplets: number;
+  triplets: TripletItem[];
+  store_backend: string;
+}
+
+export interface ExportRdfResponse {
+  format: string;
+  content: string;
+  total_triplets: number;
+}
+
 export interface ProcessResponse {
   summary: string;
   flashcards: Flashcard[];
   graph_nodes?: GraphConcept[];
   concepts?: GraphConcept[];
-  provenance_summary?: string;
+  graph?: KnowledgeGraph;
+  provenance_summary?: any;
   status?: string;
   error?: string;
   [key: string]: any;

@@ -47,6 +47,26 @@ Crucially, modern AI governance requires complete provenance tracking. Through d
           relations: ['verifies:urn:semantica:concept:neuro_symbolic']
         }
       ],
+      graph: {
+        nodes: [
+          { id: 'urn:semantica:concept:neuro_symbolic', label: 'Neuro-Symbolic Architecture', type: 'CoreConcept', description: 'Hybrid paradigm uniting connectionist LLMs with symbolic knowledge graphs.' },
+          { id: 'urn:semantica:concept:oxigraph', label: 'Oxigraph RDF Triplestore', type: 'StorageEngine', description: 'High-performance embedded SPARQL and RDF graph database ensuring deterministic ground truth.' },
+          { id: 'urn:semantica:concept:provenance', label: 'W3C PROV-O Decision Lineage', type: 'AuditEntity', description: 'Cryptographic lineage tracking derivation paths from source paragraphs to synthesized cards.' }
+        ],
+        edges: [
+          { source: 'urn:semantica:concept:neuro_symbolic', target: 'urn:semantica:concept:oxigraph', relation: 'integrates' },
+          { source: 'urn:semantica:concept:neuro_symbolic', target: 'urn:semantica:concept:provenance', relation: 'enforces' },
+          { source: 'urn:semantica:concept:oxigraph', target: 'urn:semantica:concept:neuro_symbolic', relation: 'serves' },
+          { source: 'urn:semantica:concept:provenance', target: 'urn:semantica:concept:neuro_symbolic', relation: 'verifies' }
+        ],
+        triplets: [
+          { subject: 'https://smartbrief.ai/concept/neuro-symbolic-architecture', predicate: 'http://www.w3.org/1999/02/22-rdf-syntax-ns#type', object: 'https://smartbrief.ai/ontology/core-concept', confidence: 1.0 },
+          { subject: 'https://smartbrief.ai/concept/neuro-symbolic-architecture', predicate: 'https://smartbrief.ai/ontology/integrates', object: 'https://smartbrief.ai/concept/oxigraph-rdf-triplestore', confidence: 0.98 },
+          { subject: 'https://smartbrief.ai/concept/neuro-symbolic-architecture', predicate: 'https://smartbrief.ai/ontology/enforces', object: 'https://smartbrief.ai/concept/w3c-prov-o-decision-lineage', confidence: 0.98 },
+          { subject: 'https://smartbrief.ai/concept/oxigraph-rdf-triplestore', predicate: 'https://smartbrief.ai/ontology/serves', object: 'https://smartbrief.ai/concept/neuro-symbolic-architecture', confidence: 0.96 }
+        ],
+        triplet_count: 4
+      },
       flashcards: [
         {
           id: 1,
@@ -146,6 +166,23 @@ Recent breakthroughs in superconducting transmon circuits and trapped-ion system
           relations: ['implements:urn:semantica:concept:quantum_superposition']
         }
       ],
+      graph: {
+        nodes: [
+          { id: 'urn:semantica:concept:quantum_superposition', label: 'Superposition & Entanglement', type: 'QuantumPrinciple', description: 'Mechanisms enabling exponential state spaces and non-local correlations across qubits.' },
+          { id: 'urn:semantica:concept:surface_codes', label: 'Topological Surface Codes', type: 'ErrorCorrection', description: '2D lattice error-correction schemes preserving logical qubits against environmental noise.' },
+          { id: 'urn:semantica:concept:superconducting_qubits', label: 'Superconducting Transmon Qubits', type: 'HardwareArchitecture', description: 'Josephson junction-based cryogenic circuits demonstrating high-fidelity quantum gates.' }
+        ],
+        edges: [
+          { source: 'urn:semantica:concept:quantum_superposition', target: 'urn:semantica:concept:superconducting_qubits', relation: 'implemented_by' },
+          { source: 'urn:semantica:concept:surface_codes', target: 'urn:semantica:concept:superconducting_qubits', relation: 'protects' }
+        ],
+        triplets: [
+          { subject: 'https://smartbrief.ai/concept/superposition-and-entanglement', predicate: 'http://www.w3.org/1999/02/22-rdf-syntax-ns#type', object: 'https://smartbrief.ai/ontology/quantum-principle', confidence: 1.0 },
+          { subject: 'https://smartbrief.ai/concept/topological-surface-codes', predicate: 'https://smartbrief.ai/ontology/protects', object: 'https://smartbrief.ai/concept/superconducting-transmon-qubits', confidence: 0.97 },
+          { subject: 'https://smartbrief.ai/concept/superconducting-transmon-qubits', predicate: 'https://smartbrief.ai/ontology/implements', object: 'https://smartbrief.ai/concept/superposition-and-entanglement', confidence: 0.95 }
+        ],
+        triplet_count: 3
+      },
       flashcards: [
         {
           id: 1,
@@ -245,6 +282,23 @@ Modern carbon pricing mechanisms, including cap-and-trade allowances and border 
           relations: ['causes:urn:semantica:concept:biodiversity_loss']
         }
       ],
+      graph: {
+        nodes: [
+          { id: 'urn:semantica:concept:carbon_pricing', label: 'Carbon Pricing & Market Internalization', type: 'PolicyMechanism', description: 'Economic instruments placing monetary costs on carbon emissions to realign industrial incentives.' },
+          { id: 'urn:semantica:concept:circular_economy', label: 'Circular Economy Framework', type: 'MacroeconomicModel', description: 'Closed-loop industrial paradigm minimizing raw extraction through material reuse and regenerative flows.' },
+          { id: 'urn:semantica:concept:market_externalities', label: 'Environmental Market Externalities', type: 'EconomicFailure', description: 'Disparity between private production costs and societal ecological damage.' }
+        ],
+        edges: [
+          { source: 'urn:semantica:concept:carbon_pricing', target: 'urn:semantica:concept:market_externalities', relation: 'remedies' },
+          { source: 'urn:semantica:concept:circular_economy', target: 'urn:semantica:concept:carbon_pricing', relation: 'complements' }
+        ],
+        triplets: [
+          { subject: 'https://smartbrief.ai/concept/carbon-pricing-and-market-internalization', predicate: 'http://www.w3.org/1999/02/22-rdf-syntax-ns#type', object: 'https://smartbrief.ai/ontology/policy-mechanism', confidence: 1.0 },
+          { subject: 'https://smartbrief.ai/concept/carbon-pricing-and-market-internalization', predicate: 'https://smartbrief.ai/ontology/remedies', object: 'https://smartbrief.ai/concept/environmental-market-externalities', confidence: 0.98 },
+          { subject: 'https://smartbrief.ai/concept/circular-economy-framework', predicate: 'https://smartbrief.ai/ontology/complements', object: 'https://smartbrief.ai/concept/carbon-pricing-and-market-internalization', confidence: 0.96 }
+        ],
+        triplet_count: 3
+      },
       flashcards: [
         {
           id: 1,

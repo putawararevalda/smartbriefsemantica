@@ -22,6 +22,7 @@ import {
 } from 'lucide-react';
 import { ProcessResponse, Flashcard, GraphConcept } from '@/types';
 import FlashcardDeck from './FlashcardDeck';
+import KnowledgeGraphExplorer from './KnowledgeGraphExplorer';
 
 export interface DualPaneWorkspaceProps {
   sourceText: string;
@@ -31,7 +32,7 @@ export interface DualPaneWorkspaceProps {
   documentTitle?: string;
 }
 
-type ActiveTab = 'flashcards' | 'summary' | 'concepts';
+type ActiveTab = 'flashcards' | 'summary' | 'concepts' | 'graph';
 type MobileView = 'synthesis' | 'source';
 
 export default function DualPaneWorkspace({
@@ -54,12 +55,14 @@ export default function DualPaneWorkspace({
   const flashcardDeckRef = useRef<HTMLDivElement>(null);
   const summaryRef = useRef<HTMLDivElement>(null);
   const conceptMatrixRef = useRef<HTMLDivElement>(null);
+  const graphExplorerRef = useRef<HTMLDivElement>(null);
 
   const flashcards = result.flashcards || [];
   const concepts = useMemo(() => {
     return (result.graph_nodes || result.concepts || []) as GraphConcept[];
   }, [result.graph_nodes, result.concepts]);
   const summary = result.summary || '';
+  const tripletCount = result.graph?.triplet_count || result.graph?.triplets?.length || (concepts.length > 0 ? concepts.length * 2 : 0);
 
   // Word count & paragraphs
   const trimmed = sourceText.trim();
@@ -115,6 +118,8 @@ export default function DualPaneWorkspace({
         conceptMatrixRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
       } else if (tab === 'summary') {
         summaryRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      } else if (tab === 'graph') {
+        graphExplorerRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
       }
     }
   };
@@ -444,6 +449,46 @@ export default function DualPaneWorkspace({
                   {concepts.length}
                 </span>
               </button>
+
+              {/* Tab 4: Knowledge Graph */}
+              <button
+                type="button"
+                role="tab"
+                id="tab-graph"
+                aria-selected={activeTab === 'graph'}
+                aria-controls="tabpanel-graph"
+                onClick={() => handleTabChange('graph')}
+                className={`cursor-pointer flex-1 py-2 px-2 sm:px-3 rounded-xl text-xs sm:text-sm font-bold flex items-center justify-center gap-1.5 transition-all focus:outline-none focus:ring-2 focus:ring-blue-500/20 ${
+                  activeTab === 'graph'
+                    ? 'bg-blue-600 text-white shadow-sm'
+                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+                }`}
+                aria-label="Knowledge Graph and Oxigraph triplestore tab"
+              >
+                <Share2 className="w-3.5 h-3.5 pointer-events-none shrink-0" />
+                <span className="pointer-events-none select-none">Graph</span>
+                <span
+                  role="button"
+                  tabIndex={0}
+                  onClick={(e) => handleBadgeClick('graph', e)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      handleTabChange('graph');
+                    }
+                  }}
+                  aria-label={`View ${tripletCount} triples in Oxigraph`}
+                  title={`Click badge to view ${tripletCount} triples in Oxigraph`}
+                  className={`cursor-pointer select-none text-[10px] font-mono px-1.5 py-0.5 rounded-full transition-all hover:scale-110 active:scale-95 ${
+                    activeTab === 'graph'
+                      ? 'bg-blue-700/80 text-white shadow-xs hover:bg-blue-800'
+                      : 'bg-slate-200 text-slate-700 hover:bg-slate-300'
+                  }`}
+                >
+                  {tripletCount}
+                </span>
+              </button>
             </div>
           </div>
 
@@ -672,6 +717,23 @@ export default function DualPaneWorkspace({
                   );
                 })}
               </div>
+            </div>
+          )}
+
+          {/* TAB 4: KNOWLEDGE GRAPH & OXIGRAPH EXPLORER */}
+          {activeTab === 'graph' && (
+            <div
+              id="tabpanel-graph"
+              role="tabpanel"
+              aria-labelledby="tab-graph"
+              ref={graphExplorerRef}
+              className="space-y-4 animate-in fade-in duration-200"
+            >
+              <KnowledgeGraphExplorer
+                graph={result.graph}
+                concepts={concepts}
+                initialTriplets={result.graph?.triplets}
+              />
             </div>
           )}
         </div>
