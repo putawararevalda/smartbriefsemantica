@@ -166,8 +166,9 @@ def test_export_graph_turtle_endpoint(client):
 
 
 def test_rag_query_success(client):
-    """Verify POST /api/rag/query executes traversal <10ms and attaches W3C PROV-O."""
-    # First seed store via process
+    """Verify valid session + query matching existing concept returns 200, answer, matched concepts, and non-empty triples."""
+    import time
+    # Seed knowledge graph via process endpoint
     sample_text = (
         "SmartBrief uses Oxigraph as an embedded triplestore for Knowledge Graph reasoning. "
         "W3C PROV-O provides auditable decision provenance."
@@ -181,12 +182,20 @@ def test_rag_query_success(client):
         "query": "How does Oxigraph relate to Knowledge Graph and SPARQL?",
         "top_k_triples": 15,
     }
+
+    t0 = time.perf_counter()
     response = client.post("/api/rag/query", json=rag_payload)
+    elapsed = time.perf_counter() - t0
+
     assert response.status_code == 200
+    # Performance benchmark: Total backend endpoint response under 1.5s
+    assert elapsed < 1.5, f"Endpoint response took {elapsed:.3f}s, expected < 1.5s"
+
     data = response.json()
 
     # Query & Answer
     assert data["query"] == rag_payload["query"]
+    assert "answer" in data
     assert len(data["answer"]) > 0
     assert "Knowledge Graph" in data["answer"] or "Oxigraph" in data["answer"]
 
@@ -201,7 +210,7 @@ def test_rag_query_success(client):
         assert mc["uri"].startswith("https://smartbrief.ai/concept/")
 
     assert "retrieved_triples" in ctx
-    assert len(ctx["retrieved_triples"]) >= 1
+    assert len(ctx["retrieved_triples"]) >= 1, "Expected non-empty triples list for matched concept"
     for rt in ctx["retrieved_triples"]:
         assert "subject" in rt
         assert "predicate" in rt
@@ -209,8 +218,8 @@ def test_rag_query_success(client):
         assert "raw_triple" in rt
 
     assert ctx["traversal_hops"] == 2
-    # Acceptance criteria: traversal overhead < 10ms
-    assert ctx["execution_time_ms"] < 10.0
+    # Benchmark: in-process Oxigraph SPARQL traversal executes under 10ms
+    assert ctx["execution_time_ms"] < 10.0, f"Graph traversal took {ctx['execution_time_ms']}ms, expected < 10ms"
 
     # W3C PROV-O Provenance
     prov = data["provenance"]
@@ -227,8 +236,8 @@ def test_rag_query_success(client):
     assert isinstance(prov["lineage_chain"], list)
 
 
-def test_rag_query_fallback_unmatched_concepts(client):
-    """Verify POST /api/rag/query gracefully handles queries with no matching concepts."""
+def test_rag_query_unmatched_concept(client):
+    """Verify query with unknown terms returns 200 with fallback answer and empty triples list (no 500 error)."""
     rag_payload = {
         "session_id": "test_session_fallback",
         "query": "What is the orbital speed of Jupiter moons?",
@@ -247,42 +256,112 @@ def test_rag_query_fallback_unmatched_concepts(client):
     # Fallback answer should be returned
     assert "No relevant knowledge graph concepts" in data["answer"]
 
-    # Provenance record is still recorded
+    # Provenance record is still created
     prov = data["provenance"]
     assert "entity_id" in prov
     assert len(prov["checksum"]) == 64
 
 
-def test_rag_query_provenance_retrieval(client):
-    """Verify W3C PROV-O audit record is stored and retrievable via GET /api/provenance/{entity_id}."""
+# Alias for backwards compatibility
+test_rag_query_fallback_unmatched_concepts = test_rag_query_unmatched_concept
+
+
+def test_rag_query_missing_fields(client):
+    """Verify validation errors for missing session_id, missing query, or empty query (status 400/422)."""
+    # 1. Missing session_id -> 422 Unprocessable Entity
+    resp_no_session = client.post("/api/rag/query", json={"query": "Oxigraph reasoning"})
+    assert resp_no_session.status_code == 422
+
+    # 2. Missing query field -> 422 Unprocessable Entity
+    resp_no_query = client.post("/api/rag/query", json={"session_id": "s1"})
+    assert resp_no_query.status_code == 422
+
+    # 3. Empty string query (min_length=1 constraint) -> 422
+    resp_empty_str = client.post("/api/rag/query", json={"session_id": "s1", "query": ""})
+    assert resp_empty_str.status_code == 422
+
+    # 4. Whitespace-only query string -> 400 Bad Request
+    resp_whitespace = client.post("/api/rag/query", json={"session_id": "s1", "query": "   "})
+    assert resp_whitespace.status_code == 400
+    assert "Query cannot be empty" in resp_whitespace.json().get("detail", "")
+
+    # 5. Invalid top_k_triples (<= 0) -> 422
+    resp_invalid_k = client.post(
+        "/api/rag/query",
+        json={"session_id": "s1", "query": "Oxigraph", "top_k_triples": 0},
+    )
+    assert resp_invalid_k.status_code == 422
+
+
+# Alias for backwards compatibility
+test_rag_query_validation = test_rag_query_missing_fields
+
+
+def test_rag_provenance_audit(client):
+    """Verify provenance entity created in ProvenanceManager matches W3C PROV-O schema and can be fetched via GET /api/provenance/{entity_id}."""
     rag_payload = {
         "session_id": "test_session_prov_lookup",
         "query": "Explain Oxigraph and SPARQL queries.",
     }
     response = client.post("/api/rag/query", json=rag_payload)
     assert response.status_code == 200
-    entity_id = response.json()["provenance"]["entity_id"]
+    prov_payload = response.json()["provenance"]
+    entity_id = prov_payload["entity_id"]
 
-    # Retrieve from provenance endpoint
+    # Verify W3C PROV-O schema compliance in response
+    assert "entity_id" in prov_payload
+    assert "activity" in prov_payload
+    assert "agent" in prov_payload
+    assert "timestamp" in prov_payload
+    assert "checksum" in prov_payload
+    assert "w3c_prov" in prov_payload
+    assert "wasDerivedFrom" in prov_payload["w3c_prov"]
+    assert "wasGeneratedBy" in prov_payload["w3c_prov"]
+    assert "wasAttributedTo" in prov_payload["w3c_prov"]
+    assert "lineage_chain" in prov_payload
+
+    # Query provenance endpoint directly
     prov_resp = client.get(f"/api/provenance/{entity_id}")
     assert prov_resp.status_code == 200
     prov_data = prov_resp.json()
     assert prov_data["entity_id"] == entity_id
     assert "lineage_chain" in prov_data
+    assert isinstance(prov_data["lineage_chain"], list)
 
 
-def test_rag_query_validation(client):
-    """Verify input validation for POST /api/rag/query."""
-    # Empty query string
-    resp_empty = client.post("/api/rag/query", json={"session_id": "s1", "query": "   "})
-    assert resp_empty.status_code == 400
+# Alias for backwards compatibility
+test_rag_query_provenance_retrieval = test_rag_provenance_audit
 
-    # Invalid top_k_triples (<= 0)
-    resp_invalid_k = client.post(
-        "/api/rag/query",
-        json={"session_id": "s1", "query": "Oxigraph", "top_k_triples": 0},
+
+def test_rag_performance_benchmarks(client):
+    """Verify Oxigraph in-process SPARQL query executes in <10ms and total backend endpoint response is <1.5s."""
+    import time
+    # Seed data
+    client.post(
+        "/api/process",
+        json={"text": "Oxigraph SPARQL query benchmark and W3C PROV-O provenance verification."},
     )
-    assert resp_invalid_k.status_code == 422
+
+    rag_payload = {
+        "session_id": "bench_session",
+        "query": "What is Oxigraph?",
+        "top_k_triples": 15,
+    }
+
+    # Measure total endpoint response time
+    t0 = time.perf_counter()
+    resp = client.post("/api/rag/query", json=rag_payload)
+    endpoint_latency = time.perf_counter() - t0
+
+    assert resp.status_code == 200
+    data = resp.json()
+
+    # Benchmark Criteria 1: Total backend endpoint response under 1.5s
+    assert endpoint_latency < 1.5, f"Endpoint latency {endpoint_latency:.4f}s exceeded 1.5s"
+
+    # Benchmark Criteria 2: Oxigraph in-process SPARQL traversal executed under 10ms
+    sparql_latency_ms = data["graph_context"]["execution_time_ms"]
+    assert sparql_latency_ms < 10.0, f"Oxigraph SPARQL traversal {sparql_latency_ms:.2f}ms exceeded 10ms"
 
 
 def test_unit_extract_query_concepts_and_subgraph_traversal():
