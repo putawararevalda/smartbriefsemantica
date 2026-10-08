@@ -9,7 +9,8 @@ from datetime import datetime, timezone
 import hashlib
 import os
 import re
-from typing import Any, Dict, List, Optional
+import time
+from typing import Any, Dict, List, Optional, Union
 import uuid
 
 from fastapi import FastAPI, HTTPException, status
@@ -184,6 +185,92 @@ class ProcessResponse(BaseModel):
     provenance_summary: ProvenanceSummary
 
 
+class MatchedConcept(BaseModel):
+    """Entity matched from query text in embedded Oxigraph store."""
+
+    id: str = Field(..., description="Unique concept node identifier (e.g., concept:oxigraph).")
+    name: str = Field(..., description="Human-readable concept name.")
+    uri: str = Field(..., description="Canonical concept RDF URI.")
+
+
+class RetrievedTriple(BaseModel):
+    """Sub-graph triple retrieved from Oxigraph."""
+
+    subject: str = Field(..., description="RDF subject URI.")
+    predicate: str = Field(..., description="RDF predicate URI.")
+    object: str = Field(..., description="RDF object URI or literal.")
+    raw_triple: str = Field(..., description="Formatted triple representation string.")
+
+
+class GraphContext(BaseModel):
+    """Retrieved subgraph context from embedded Oxigraph store."""
+
+    matched_concepts: List[MatchedConcept] = Field(
+        default_factory=list,
+        description="Entities matched from query in knowledge graph.",
+    )
+    retrieved_triples: List[RetrievedTriple] = Field(
+        default_factory=list,
+        description="1-hop and 2-hop triples retrieved via SPARQL traversal.",
+    )
+    traversal_hops: int = Field(default=2, description="Number of traversal hops executed.")
+    execution_time_ms: float = Field(
+        ...,
+        description="Execution latency in milliseconds for subgraph traversal.",
+    )
+
+
+class RAGProvenance(BaseModel):
+    """Semantica decision provenance audit trail for a GraphRAG query."""
+
+    entity_id: str = Field(..., description="Unique identifier for the RAG query provenance entity.")
+    source_node: str = Field(..., description="Knowledge graph node(s) or concept URIs.")
+    source_document: str = Field(..., description="Root document or session context URI.")
+    agent: str = Field(default="Semantica GraphRAG Engine", description="Agent responsible.")
+    activity: str = Field(default="rag_synthesis", description="Generating activity.")
+    timestamp: str = Field(..., description="UTC ISO-8601 timestamp.")
+    checksum: str = Field(..., description="SHA-256 integrity checksum.")
+    w3c_prov: W3CProvMetadata
+    lineage_chain: List[Dict[str, Any]] = Field(
+        default_factory=list,
+        description="Full lineage ancestry chain from Semantica ProvenanceManager.",
+    )
+
+
+class RAGQueryRequest(BaseModel):
+    """Request payload for Hybrid GraphRAG query."""
+
+    session_id: str = Field(
+        ...,
+        description="Session identifier to anchor the query context.",
+        examples=["proc_a1b2c3d4"],
+    )
+    query: str = Field(
+        ...,
+        min_length=1,
+        description="Natural language question to answer using the knowledge graph.",
+        examples=["How does Oxigraph enable deterministic reasoning in SmartBrief?"],
+    )
+    top_k_triples: int = Field(
+        default=15,
+        ge=1,
+        le=100,
+        description="Maximum number of triples to retrieve.",
+    )
+
+
+class RAGQueryResponse(BaseModel):
+    """Top-level response schema for POST /api/rag/query."""
+
+    query: str = Field(..., description="The original query.")
+    answer: str = Field(..., description="Synthesized answer combining graph triples and document context.")
+    graph_context: GraphContext = Field(..., description="Retrieved subgraph and traversal metadata.")
+    provenance: Union[RAGProvenance, FlashcardProvenance] = Field(
+        ...,
+        description="W3C PROV-O decision provenance audit trail.",
+    )
+
+
 # ---------------------------------------------------------------------------
 # Helper Functions
 # ---------------------------------------------------------------------------
@@ -216,52 +303,53 @@ def _extract_summary(text: str) -> str:
     )
 
 
+# Domain dictionary of recognizable concepts with semantic metadata
+CANDIDATE_CONCEPTS: List[Dict[str, Any]] = [
+    {
+        "name": "Knowledge Graph",
+        "category": "Data Architecture",
+        "description": "Structured network of entities, concepts, and explicit semantic relationships.",
+        "patterns": [r"\bknowledge\s+graphs?\b", r"\bkg\b", r"\bontology\b", r"\brdf\b"],
+    },
+    {
+        "name": "Oxigraph",
+        "category": "Graph Storage",
+        "description": "High-performance embedded SPARQL 1.1 graph database implemented in Rust.",
+        "patterns": [r"\boxigraph\b", r"\btriplestore\b", r"\bsparql\b"],
+    },
+    {
+        "name": "W3C PROV-O",
+        "category": "Provenance Standard",
+        "description": "The W3C Provenance Ontology providing audit trails for entities, activities, and agents.",
+        "patterns": [r"\bprovenance\b", r"\bprov-o\b", r"\baudit\b", r"\blineage\b"],
+    },
+    {
+        "name": "Deterministic Reasoning",
+        "category": "AI Cognition",
+        "description": "Rule-based and graph-traversal inference yielding reproducible and verifiable conclusions.",
+        "patterns": [r"\bdeterministic\b", r"\breasoning\b", r"\brules?\b", r"\blogic\b"],
+    },
+    {
+        "name": "Context Graph",
+        "category": "Memory Infrastructure",
+        "description": "Graph-native context store that anchors LLM prompts to verifiable knowledge nodes.",
+        "patterns": [r"\bcontext\b", r"\bmemory\b", r"\bgrounding\b", r"\bvector\b"],
+    },
+    {
+        "name": "AI Decision Intelligence",
+        "category": "Accountable AI",
+        "description": "First-class recording of reasoning paths, confidence scores, and causal ancestry.",
+        "patterns": [r"\bdecision\b", r"\baccountab\w+", r"\bintelligence\b", r"\bllm\b"],
+    },
+]
+
+
 def _extract_key_concepts(text: str) -> List[Dict[str, str]]:
     """Simulate concept and entity extraction from input text for graph modeling."""
     found_concepts = []
 
-    # Domain dictionary of recognizable concepts with semantic metadata
-    candidate_dict = [
-        {
-            "name": "Knowledge Graph",
-            "category": "Data Architecture",
-            "description": "Structured network of entities, concepts, and explicit semantic relationships.",
-            "patterns": [r"\bknowledge\s+graphs?\b", r"\bkg\b", r"\bontology\b", r"\brdf\b"],
-        },
-        {
-            "name": "Oxigraph",
-            "category": "Graph Storage",
-            "description": "High-performance embedded SPARQL 1.1 graph database implemented in Rust.",
-            "patterns": [r"\boxigraph\b", r"\btriplestore\b", r"\bsparql\b"],
-        },
-        {
-            "name": "W3C PROV-O",
-            "category": "Provenance Standard",
-            "description": "The W3C Provenance Ontology providing audit trails for entities, activities, and agents.",
-            "patterns": [r"\bprovenance\b", r"\bprov-o\b", r"\baudit\b", r"\blineage\b"],
-        },
-        {
-            "name": "Deterministic Reasoning",
-            "category": "AI Cognition",
-            "description": "Rule-based and graph-traversal inference yielding reproducible and verifiable conclusions.",
-            "patterns": [r"\bdeterministic\b", r"\breasoning\b", r"\brules?\b", r"\blogic\b"],
-        },
-        {
-            "name": "Context Graph",
-            "category": "Memory Infrastructure",
-            "description": "Graph-native context store that anchors LLM prompts to verifiable knowledge nodes.",
-            "patterns": [r"\bcontext\b", r"\bmemory\b", r"\bgrounding\b", r"\bvector\b"],
-        },
-        {
-            "name": "AI Decision Intelligence",
-            "category": "Accountable AI",
-            "description": "First-class recording of reasoning paths, confidence scores, and causal ancestry.",
-            "patterns": [r"\bdecision\b", r"\baccountab\w+", r"\bintelligence\b", r"\bllm\b"],
-        },
-    ]
-
     lower_text = text.lower()
-    for item in candidate_dict:
+    for item in CANDIDATE_CONCEPTS:
         for pat in item["patterns"]:
             if re.search(pat, lower_text):
                 found_concepts.append(
@@ -274,12 +362,260 @@ def _extract_key_concepts(text: str) -> List[Dict[str, str]]:
                 break
 
     # If fewer than 3 concepts found, supplement with top domain concepts
-    fallback_pool = [c for c in candidate_dict if c not in found_concepts]
+    fallback_pool = [c for c in CANDIDATE_CONCEPTS if c not in found_concepts]
     while len(found_concepts) < 3 and fallback_pool:
         found_concepts.append(fallback_pool.pop(0))
 
     # Return top 3 distinct concepts
     return found_concepts[:3]
+
+
+def _extract_query_concepts(query: str, store: OxigraphStore) -> List[Dict[str, str]]:
+    """Extract and match concepts mentioned in query against the Oxigraph store."""
+    if not query or not query.strip() or store is None:
+        return []
+
+    # SPARQL query to discover existing concepts in store
+    sparql_query = """
+    SELECT DISTINCT ?c WHERE {
+        { ?c ?p ?o . FILTER(isURI(?c) && STRSTARTS(STR(?c), "https://smartbrief.ai/concept/")) }
+        UNION
+        { ?s ?p ?c . FILTER(isURI(?c) && STRSTARTS(STR(?c), "https://smartbrief.ai/concept/")) }
+        UNION
+        { ?c ?p ?o . FILTER(isURI(?c) && !STRSTARTS(STR(?c), "urn:smartbrief:doc:") && !STRSTARTS(STR(?c), "http://www.w3.org/") && !STRSTARTS(STR(?c), "https://smartbrief.ai/ontology/")) }
+    }
+    """
+    try:
+        res = store.execute_sparql(sparql_query)
+        bindings = res.get("bindings", []) if isinstance(res, dict) else []
+    except Exception:
+        bindings = []
+
+    concept_uris = set()
+    for b in bindings:
+        c_val = b.get("c", {}).get("value")
+        if c_val:
+            concept_uris.add(c_val)
+
+    if not concept_uris:
+        return []
+
+    lower_query = query.lower()
+    matched: List[Dict[str, str]] = []
+    seen_ids = set()
+
+    for uri in sorted(concept_uris):
+        slug = uri.rsplit("/", 1)[-1].replace("#", "")
+        clean_slug = _slugify(slug)
+        concept_id = f"concept:{clean_slug}"
+
+        candidate_match = next(
+            (c for c in CANDIDATE_CONCEPTS if _slugify(c["name"]) == clean_slug),
+            None,
+        )
+
+        name = candidate_match["name"] if candidate_match else slug.replace("_", " ").title()
+
+        is_match = False
+        if candidate_match:
+            for pat in candidate_match["patterns"]:
+                if re.search(pat, lower_query):
+                    is_match = True
+                    break
+
+        if not is_match:
+            slug_words = clean_slug.replace("_", " ")
+            if name.lower() in lower_query or slug_words in lower_query or clean_slug in lower_query:
+                is_match = True
+            elif uri.lower() in lower_query:
+                is_match = True
+            elif any(w in lower_query.split() for w in clean_slug.split("_") if len(w) > 3):
+                is_match = True
+
+        if is_match and concept_id not in seen_ids:
+            seen_ids.add(concept_id)
+            matched.append(
+                {
+                    "id": concept_id,
+                    "name": name,
+                    "uri": uri,
+                }
+            )
+
+    return matched
+
+
+def _traverse_subgraph(
+    concept_uris: List[str],
+    store: OxigraphStore,
+    hops: int = 2,
+    limit: int = 15,
+) -> List[Dict[str, str]]:
+    """Traverse 1-hop and 2-hop subgraphs around matched concepts using SPARQL."""
+    if not concept_uris or store is None:
+        return []
+
+    valid_uris = [
+        u
+        for u in concept_uris
+        if isinstance(u, str)
+        and (u.startswith("http://") or u.startswith("https://") or u.startswith("urn:"))
+    ]
+    if not valid_uris:
+        return []
+
+    start_clause = " ".join(f"<{u}>" for u in valid_uris)
+
+    if hops <= 1:
+        sparql_query = f"""
+        SELECT DISTINCT ?s ?p ?o WHERE {{
+            VALUES ?start {{ {start_clause} }}
+            {{
+                ?start ?p ?o .
+                BIND(?start AS ?s)
+            }} UNION {{
+                ?s ?p ?start .
+                BIND(?start AS ?o)
+            }}
+        }} LIMIT {limit}
+        """
+    else:
+        sparql_query = f"""
+        SELECT DISTINCT ?s ?p ?o WHERE {{
+            VALUES ?start {{ {start_clause} }}
+            {{
+                ?start ?p ?o .
+                BIND(?start AS ?s)
+            }} UNION {{
+                ?s ?p ?start .
+                BIND(?start AS ?o)
+            }} UNION {{
+                ?start ?p1 ?mid .
+                ?mid ?p ?o .
+                BIND(?mid AS ?s)
+                FILTER(?o != ?start)
+            }} UNION {{
+                ?mid ?p1 ?start .
+                ?s ?p ?mid .
+                BIND(?mid AS ?o)
+                FILTER(?s != ?start)
+            }}
+        }} LIMIT {limit}
+        """
+
+    try:
+        result = store.execute_sparql(sparql_query)
+        bindings = result.get("bindings", []) if isinstance(result, dict) else []
+    except Exception:
+        bindings = []
+
+    seen = set()
+    triples: List[Dict[str, str]] = []
+    for b in bindings:
+        s_val = b.get("s", {}).get("value", "")
+        p_val = b.get("p", {}).get("value", "")
+        o_val = b.get("o", {}).get("value", "")
+        key = (s_val, p_val, o_val)
+        if key in seen:
+            continue
+        seen.add(key)
+        raw_triple = f"{s_val} {p_val} {o_val}"
+        triples.append(
+            {
+                "subject": s_val,
+                "predicate": p_val,
+                "object": o_val,
+                "raw_triple": raw_triple,
+            }
+        )
+        if len(triples) >= limit:
+            break
+
+    return triples
+
+
+def _format_uri_label(uri: str) -> str:
+    """Format a URI into a readable label."""
+    if uri.startswith("https://smartbrief.ai/concept/"):
+        return uri.split("/")[-1].replace("_", " ").title()
+    if uri.startswith("https://smartbrief.ai/ontology/"):
+        return uri.split("/")[-1]
+    if uri.startswith("urn:smartbrief:doc:"):
+        return f"Document({uri.split(':')[-1]})"
+    return uri.split("/")[-1]
+
+
+def _synthesize_hybrid_answer(
+    query: str,
+    matched_concepts: List[Dict[str, str]],
+    retrieved_triples: List[Dict[str, str]],
+    session_id: str,
+    doc_summary: Optional[str] = None,
+) -> str:
+    """Synthesize a hybrid GraphRAG response combining graph triples and document context."""
+    if not matched_concepts:
+        return (
+            f"No relevant knowledge graph concepts or relations were found for query: '{query}'. "
+            "The embedded Oxigraph knowledge graph currently contains no entities matching this query."
+        )
+
+    concept_names = [c["name"] for c in matched_concepts]
+    concepts_str = ", ".join(concept_names)
+
+    # Detailed descriptions for matched concepts
+    concept_descriptions = []
+    for c in matched_concepts:
+        clean_slug = _slugify(c["name"])
+        candidate = next(
+            (cand for cand in CANDIDATE_CONCEPTS if _slugify(cand["name"]) == clean_slug),
+            None,
+        )
+        if candidate:
+            concept_descriptions.append(
+                f"- **{candidate['name']}** ({candidate['category']}): {candidate['description']}"
+            )
+        else:
+            concept_descriptions.append(f"- **{c['name']}**: Knowledge graph entity ({c['uri']})")
+
+    # Format retrieved relational triples into human-readable sentences
+    relation_sentences = []
+    for t in retrieved_triples:
+        s_lbl = _format_uri_label(t["subject"])
+        p_lbl = t["predicate"].rsplit("/", 1)[-1].replace("#", "")
+        o_lbl = _format_uri_label(t["object"])
+
+        # Create natural language relation
+        if p_lbl == "type":
+            rel_phrase = f"{s_lbl} is an instance of {o_lbl}"
+        elif p_lbl == "extractedFrom":
+            rel_phrase = f"{s_lbl} was extracted from {o_lbl}"
+        elif p_lbl == "interactsWith":
+            rel_phrase = f"{s_lbl} interacts with {o_lbl}"
+        elif p_lbl == "enables":
+            rel_phrase = f"{s_lbl} enables {o_lbl}"
+        else:
+            rel_phrase = f"{s_lbl} {p_lbl} {o_lbl}"
+
+        relation_sentences.append(f"- {rel_phrase} (`{t['raw_triple']}`)")
+
+    parts = [
+        f"Based on the Knowledge Graph context, the query '{query}' relates to {concepts_str}."
+    ]
+
+    if concept_descriptions:
+        parts.append("### Grounded Concepts\n" + "\n".join(concept_descriptions))
+
+    if relation_sentences:
+        parts.append("### Retrieved Graph Relations\n" + "\n".join(relation_sentences[:8]))
+
+    if doc_summary:
+        parts.append(f"### Document Context\n{doc_summary}")
+
+    parts.append(
+        f"This response is grounded in session `{session_id}` with W3C PROV-O audit trail."
+    )
+
+    return "\n\n".join(parts)
 
 
 def _generate_flashcards_data(
@@ -605,3 +941,121 @@ async def get_entity_provenance(entity_id: str):
             detail=f"Provenance not found for entity ID: {entity_id}",
         )
     return lineage
+
+
+@app.post(
+    "/api/rag/query",
+    response_model=RAGQueryResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Hybrid GraphRAG Query",
+    description="Query knowledge graph using in-process hybrid GraphRAG with embedded Oxigraph subgraph traversal and Semantica W3C PROV-O provenance tracking.",
+    tags=["GraphRAG"],
+)
+async def rag_query(payload: RAGQueryRequest):
+    """Execute lightweight in-process Hybrid GraphRAG query over embedded Oxigraph knowledge graph."""
+    global oxigraph_store, provenance_manager
+
+    # Lazy-init fallback if not initialized through lifespan
+    if oxigraph_store is None:
+        oxigraph_store = OxigraphStore()
+    if provenance_manager is None:
+        provenance_manager = ProvenanceManager(storage_path=PROV_DB_PATH)
+
+    clean_query = payload.query.strip()
+    if not clean_query:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Query cannot be empty or solely whitespace.",
+        )
+
+    session_id = payload.session_id.strip() if payload.session_id else ""
+    if not session_id:
+        session_id = f"proc_{uuid.uuid4().hex[:8]}"
+
+    doc_uri = f"urn:smartbrief:doc:{session_id}"
+
+    # 1. Subgraph Traversal & Latency Measurement
+    t0 = time.perf_counter()
+    matched_concepts_raw = _extract_query_concepts(clean_query, oxigraph_store)
+    concept_uris = [c["uri"] for c in matched_concepts_raw]
+    retrieved_triples_raw = _traverse_subgraph(
+        concept_uris=concept_uris,
+        store=oxigraph_store,
+        hops=2,
+        limit=payload.top_k_triples,
+    )
+    t1 = time.perf_counter()
+    execution_time_ms = round((t1 - t0) * 1000, 3)
+
+    # 2. Hybrid Context Synthesis
+    answer = _synthesize_hybrid_answer(
+        query=clean_query,
+        matched_concepts=matched_concepts_raw,
+        retrieved_triples=retrieved_triples_raw,
+        session_id=session_id,
+    )
+
+    # 3. W3C PROV-O Provenance Registration
+    rag_entity_id = f"rag_query_{session_id}_{uuid.uuid4().hex[:8]}"
+    derived_from_uris = concept_uris + [doc_uri] if concept_uris else [doc_uri]
+    derived_from_str = ", ".join(derived_from_uris)
+    now_iso = datetime.now(timezone.utc).isoformat()
+
+    provenance_manager.track_entity(
+        entity_id=rag_entity_id,
+        source=doc_uri,
+        activity_id="rag_synthesis",
+        used_entities=derived_from_uris,
+        metadata={
+            "query": clean_query,
+            "session_id": session_id,
+            "activity": "rag_synthesis",
+            "wasDerivedFrom": derived_from_str,
+            "wasGeneratedBy": "rag_synthesis",
+            "hop_count": 2 if retrieved_triples_raw else 0,
+            "triples_retrieved": len(retrieved_triples_raw),
+        },
+    )
+
+    prov_lineage = provenance_manager.get_lineage(rag_entity_id)
+    lineage_entries = (
+        prov_lineage.get("lineage_chain", []) if isinstance(prov_lineage, dict) else []
+    )
+
+    checksum_content = f"{rag_entity_id}|{session_id}|{clean_query}|{answer}"
+    checksum = hashlib.sha256(checksum_content.encode("utf-8")).hexdigest()
+
+    source_node_str = (
+        ", ".join(c["id"] for c in matched_concepts_raw)
+        if matched_concepts_raw
+        else "none"
+    )
+
+    prov_record = RAGProvenance(
+        entity_id=rag_entity_id,
+        source_node=source_node_str,
+        source_document=doc_uri,
+        agent="Semantica GraphRAG Engine",
+        activity="rag_synthesis",
+        timestamp=now_iso,
+        checksum=checksum,
+        w3c_prov=W3CProvMetadata(
+            wasDerivedFrom=derived_from_str,
+            wasGeneratedBy="urn:smartbrief:activity:rag_synthesis",
+            wasAttributedTo="urn:smartbrief:agent:semantica_agi",
+        ),
+        lineage_chain=lineage_entries,
+    )
+
+    return RAGQueryResponse(
+        query=clean_query,
+        answer=answer,
+        graph_context=GraphContext(
+            matched_concepts=[MatchedConcept(**c) for c in matched_concepts_raw],
+            retrieved_triples=[RetrievedTriple(**t) for t in retrieved_triples_raw],
+            traversal_hops=2 if retrieved_triples_raw else (1 if matched_concepts_raw else 0),
+            execution_time_ms=execution_time_ms,
+        ),
+        provenance=prov_record,
+    )
+
