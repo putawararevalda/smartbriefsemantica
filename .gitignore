@@ -5,6 +5,9 @@ node_modules/
 
 # Testing
 coverage/
+.coverage
+htmlcov/
+.pytest_cache/
 
 # Next.js
 .next/
@@ -16,6 +19,7 @@ dist/
 # Misc
 .DS_Store
 *.pem
+*.db
 
 # Debug
 npm-debug.log*
@@ -26,7 +30,7 @@ yarn-error.log*
 .env
 .env*.local
 
-# Python cache (if backend is in repo)
+# Python cache
 __pycache__/
 *.py[cod]
 *$py.class
