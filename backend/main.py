@@ -555,7 +555,7 @@ def _extract_key_concepts(text: str) -> List[Dict[str, str]]:
                                 break
 
     # If fewer than 3 concepts found, supplement with top domain concepts
-    fallback_pool = [c for c in candidate_dict if c["name"].lower() not in {fc["name"].lower() for fc in found_concepts}]
+    fallback_pool = [c for c in CANDIDATE_CONCEPTS if c["name"].lower() not in {fc["name"].lower() for fc in found_concepts}]
     while len(found_concepts) < 3 and fallback_pool:
         found_concepts.append(fallback_pool.pop(0))
 
