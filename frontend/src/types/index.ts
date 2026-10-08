@@ -98,3 +98,68 @@ export interface ProcessResponse {
 export interface ProcessRequest {
   text: string;
 }
+
+// GraphRAG Q&A and Subgraph Evidence Types (SMAR-14)
+export interface MatchedConcept {
+  id: string;
+  name: string;
+  uri?: string;
+  category?: string;
+}
+
+export interface RetrievedTriple {
+  subject: string;
+  predicate: string;
+  object: string;
+  raw_triple?: string;
+  confidence?: number;
+}
+
+export interface GraphContext {
+  matched_concepts: MatchedConcept[];
+  retrieved_triples: RetrievedTriple[];
+  traversal_hops: number;
+  execution_time_ms: number;
+}
+
+export interface W3CProvRAGMetadata {
+  wasDerivedFrom: string[] | string;
+  wasGeneratedBy: string;
+  wasAttributedTo: string;
+}
+
+export interface RAGProvenance {
+  entity_id: string;
+  activity: string;
+  agent: string;
+  timestamp: string;
+  checksum: string;
+  w3c_prov: W3CProvRAGMetadata;
+  lineage_chain?: any[];
+}
+
+export interface RAGQueryRequest {
+  session_id: string;
+  query: string;
+  top_k_triples?: number;
+}
+
+export interface RAGQueryResponse {
+  query: string;
+  answer: string;
+  graph_context: GraphContext;
+  provenance: RAGProvenance;
+  session_id?: string;
+  error?: string;
+  status?: string;
+}
+
+export interface RAGChatMessage {
+  id: string;
+  role: 'user' | 'assistant';
+  content: string;
+  timestamp: string;
+  graph_context?: GraphContext;
+  provenance?: RAGProvenance;
+  isStreaming?: boolean;
+}
