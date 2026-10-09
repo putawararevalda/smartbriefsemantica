@@ -173,7 +173,7 @@ def test_rag_query_success(client):
         "SmartBrief uses Oxigraph as an embedded triplestore for Knowledge Graph reasoning. "
         "W3C PROV-O provides auditable decision provenance."
     )
-    proc_resp = client.post("/api/process", json={"text": sample_text})
+    proc_resp = client.post("/api/process", json={"text": sample_text, "session_id": "test_session_rag_1"})
     assert proc_resp.status_code == 200
 
     # Query the RAG endpoint
@@ -422,4 +422,212 @@ def test_unit_extract_query_concepts_and_subgraph_traversal():
     subjects = {t["subject"] for t in triples_2hop}
     assert c_oxi in subjects
     assert c_kg in subjects
+
+
+def test_source_chunk_and_provenance_persistence(client):
+    """Verify source text chunking, SQLite persistence in session_chunks, and chunk_id in provenance metadata."""
+    import sqlite3
+    from main import PROV_DB_PATH
+
+    session_id = "test_chunk_persistence_sess"
+    article_text = (
+        "Paragraph 1: Formula 1 aerodynamic engineering focuses on optimizing airflow over aerodynamic wings and bodywork. "
+        "Engineers utilize computational fluid dynamics and wind tunnel testing to maximize cornering performance.\n\n"
+        "Paragraph 2: Underbody Venturi tunnels produce massive ground effect downforce, sucking the car into the tarmac. "
+        "This allows high cornering speeds through high-speed turns while minimizing turbulent wake for following competitors.\n\n"
+        "Paragraph 3: W3C PROV-O provenance structures every decision, concept, and relationship asserted in the knowledge graph. "
+        "Auditors can verify the complete derivation ancestry of every derived finding."
+    )
+
+    proc_resp = client.post("/api/process", json={"text": article_text, "session_id": session_id})
+    assert proc_resp.status_code == 200
+    data = proc_resp.json()
+
+    # 1. Verify SQLite session_chunks table rows
+    with sqlite3.connect(PROV_DB_PATH) as conn:
+        cursor = conn.execute(
+            "SELECT session_id, chunk_id, chunk_index, content FROM session_chunks WHERE session_id = ? ORDER BY chunk_index ASC",
+            (session_id,),
+        )
+        rows = cursor.fetchall()
+        assert len(rows) >= 2, f"Expected at least 2 chunks, got {len(rows)}"
+        for idx, row in enumerate(rows):
+            assert row[0] == session_id
+            assert row[1] == f"chunk_{session_id}_{idx}"
+            assert row[2] == idx
+            assert len(row[3]) > 10
+
+    # 2. Verify provenance metadata includes chunk_id for concepts
+    concepts = data["concepts"]
+    assert len(concepts) >= 1
+    with sqlite3.connect(PROV_DB_PATH) as conn:
+        for c in concepts:
+            c_id = c["id"]
+            cursor = conn.execute("SELECT metadata FROM provenance WHERE entity_id = ?", (c_id,))
+            row = cursor.fetchone()
+            assert row is not None, f"Provenance entity {c_id} not found"
+            import json
+            meta = json.loads(row[0]) if isinstance(row[0], str) else row[0]
+            assert "chunk_id" in meta, f"Metadata for {c_id} missing chunk_id"
+            assert meta["chunk_id"].startswith(f"chunk_{session_id}_")
+
+
+def test_cross_session_isolation(client):
+    """Verify session isolation: triples and concepts from session A do not leak into queries for session B."""
+    session_a = "session_iso_formula1"
+    session_b = "session_iso_biology"
+
+    # Process Session A (Formula 1)
+    text_a = (
+        "Formula 1 aerodynamic wings and underbody tunnels produce tremendous downforce. "
+        "Aerodynamics allows racing cars to achieve extreme cornering grip."
+    )
+    resp_a = client.post("/api/process", json={"text": text_a, "session_id": session_a})
+    assert resp_a.status_code == 200
+
+    # Process Session B (Plant Biology)
+    text_b = (
+        "Photosynthesis allows green plants to convert solar light energy into chemical energy. "
+        "Chlorophyll molecules absorb photons within plant chloroplasts."
+    )
+    resp_b = client.post("/api/process", json={"text": text_b, "session_id": session_b})
+    assert resp_b.status_code == 200
+
+    # 1. Query Session A for aerodynamics
+    rag_a = client.post(
+        "/api/rag/query",
+        json={"session_id": session_a, "query": "How does aerodynamics work in cornering?"},
+    )
+    assert rag_a.status_code == 200
+    data_a = rag_a.json()
+    assert len(data_a["graph_context"]["matched_concepts"]) >= 1
+    concept_names_a = [c["name"].lower() for c in data_a["graph_context"]["matched_concepts"]]
+    assert not any("photosynthesis" in name or "chlorophyll" in name for name in concept_names_a)
+
+    # 2. Query Session B for aerodynamics (Should NOT leak concepts or triples from Session A)
+    rag_b_leak_check = client.post(
+        "/api/rag/query",
+        json={"session_id": session_b, "query": "How does aerodynamics work in cornering?"},
+    )
+    assert rag_b_leak_check.status_code == 200
+    data_b_leak = rag_b_leak_check.json()
+    assert len(data_b_leak["graph_context"]["matched_concepts"]) == 0
+    assert len(data_b_leak["graph_context"]["retrieved_triples"]) == 0
+    assert "No relevant knowledge graph concepts" in data_b_leak["answer"]
+
+    # 3. Query Session B for photosynthesis (Should only return Session B concepts and triples)
+    rag_b = client.post(
+        "/api/rag/query",
+        json={"session_id": session_b, "query": "What is photosynthesis and chlorophyll?"},
+    )
+    assert rag_b.status_code == 200
+    data_b = rag_b.json()
+    assert len(data_b["graph_context"]["matched_concepts"]) >= 1
+    for rt in data_b["graph_context"]["retrieved_triples"]:
+        assert session_a not in rt["raw_triple"]
+        assert "aerodynamics" not in rt["raw_triple"].lower()
+
+
+def test_f1_aerodynamics_query_and_chunk_grounding(client):
+    """Verify acceptance criteria query on F1 cornering speed returns fluent answer referencing downforce, wings, and tunnels."""
+    session_f1 = "session_f1_acceptance"
+    f1_article = (
+        "Formula 1 racing cars achieve high speed when attacking the corners of the circuit primarily due to aerodynamic downforce. "
+        "This downforce is generated by intricate front and rear wings combined with sculpted underbody Venturi tunnels. "
+        "The ground effect pulls the vehicle down onto the asphalt, providing immense lateral grip without creating unsustainable aerodynamic drag."
+    )
+    proc_resp = client.post("/api/process", json={"text": f1_article, "session_id": session_f1})
+    assert proc_resp.status_code == 200
+
+    query = "what attribute to f1 cars high speed in attacking the corners of the circuit?"
+    rag_resp = client.post(
+        "/api/rag/query",
+        json={"session_id": session_f1, "query": query, "top_k_triples": 15},
+    )
+    assert rag_resp.status_code == 200
+    data = rag_resp.json()
+
+    # 1. Fluent natural language answer referencing aerodynamic downforce, wings, and tunnels
+    answer = data["answer"].lower()
+    assert "downforce" in answer or "aerodynamic" in answer
+    assert "wings" in answer
+    assert "tunnels" in answer
+
+    # 2. Graph Context & Evidence Drawer compliance
+    ctx = data["graph_context"]
+    assert len(ctx["matched_concepts"]) >= 1
+    assert any("aerodynamics" in c["name"].lower() or "circuit" in c["name"].lower() for c in ctx["matched_concepts"])
+    assert len(ctx["retrieved_triples"]) >= 1
+    assert ctx["traversal_hops"] >= 1
+    assert ctx["execution_time_ms"] < 10.0
+
+    # 3. W3C PROV-O audit trail
+    prov = data["provenance"]
+    assert prov["entity_id"].startswith(f"rag_query_{session_f1}_")
+    assert len(prov["checksum"]) == 64
+    assert prov["activity"] == "rag_synthesis"
+    assert f"urn:smartbrief:doc:{session_f1}" in prov["w3c_prov"]["wasDerivedFrom"]
+
+
+def test_llm_hybrid_answer_synthesis(client, monkeypatch):
+    """Verify LLM hybrid answer synthesis with mock OpenAI completions."""
+    from unittest.mock import MagicMock
+
+    session_llm = "session_llm_synthesis"
+    proc_text = (
+        "Oxigraph provides an in-process RDF triplestore for Knowledge Graph reasoning. "
+        "W3C PROV-O guarantees tamper-evident provenance tracking."
+    )
+    proc_resp = client.post("/api/process", json={"text": proc_text, "session_id": session_llm})
+    assert proc_resp.status_code == 200
+
+    mock_chat_completion = MagicMock()
+    mock_choice = MagicMock()
+    mock_choice.message.content = (
+        "Oxigraph operates as an embedded in-process graph engine that executes SPARQL queries directly within memory. "
+        "It integrates with the Knowledge Graph to enable deterministic reasoning with minimal latency."
+    )
+    mock_chat_completion.choices = [mock_choice]
+
+    mock_openai_client = MagicMock()
+    mock_openai_client.chat.completions.create.return_value = mock_chat_completion
+
+    monkeypatch.setattr("main._get_openai_client", lambda: mock_openai_client)
+
+    rag_payload = {
+        "session_id": session_llm,
+        "query": "How does Oxigraph provide fast Knowledge Graph querying?",
+        "top_k_triples": 10,
+    }
+    resp = client.post("/api/rag/query", json=rag_payload)
+    assert resp.status_code == 200
+    data = resp.json()
+
+    assert mock_openai_client.chat.completions.create.called
+    call_kwargs = mock_openai_client.chat.completions.create.call_args[1]
+    assert call_kwargs["model"] == "gpt-4o-mini"
+    assert call_kwargs["temperature"] == 0.2
+
+    # Verify synthesized answer matches mock LLM completion
+    assert data["answer"] == mock_choice.message.content.strip()
+
+    # Verify system prompts did not include infrastructure triples like extractedFrom or Document
+    messages = call_kwargs["messages"]
+    user_prompt = next(m["content"] for m in messages if m["role"] == "user")
+    assert "extractedFrom" not in user_prompt
+    assert "https://smartbrief.ai/ontology/Document" not in user_prompt
+
+
+def test_predicate_label_formatting():
+    """Verify predicate label formatting fixes the 22-rdf-syntax-nstype bug and formats clean labels."""
+    from main import _clean_predicate_label
+
+    assert _clean_predicate_label("http://www.w3.org/1999/02/22-rdf-syntax-ns#type") == "is an instance of"
+    assert _clean_predicate_label("https://smartbrief.ai/ontology/22-rdf-syntax-nstype") == "is an instance of"
+    assert _clean_predicate_label("type") == "is an instance of"
+    assert _clean_predicate_label("https://smartbrief.ai/ontology/interactsWith") == "interacts with"
+    assert _clean_predicate_label("https://smartbrief.ai/ontology/enables") == "enables"
+    assert _clean_predicate_label("https://smartbrief.ai/ontology/relatesTo") == "relates to"
+    assert _clean_predicate_label("https://smartbrief.ai/ontology/partOf") == "is part of"
+
 
