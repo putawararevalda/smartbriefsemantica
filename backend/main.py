@@ -13,6 +13,8 @@ import re
 import time
 from typing import Any, Dict, List, Optional, Union
 import uuid
+
+import requests
 # ---------------------------------------------------------------------------
 # Load .env file dynamically if present
 # ---------------------------------------------------------------------------
@@ -186,18 +188,6 @@ def _find_originating_chunk(item_text: str, chunk_records: List[Dict[str, Any]])
         )
         return best_chunk["chunk_id"]
     return chunk_records[0]["chunk_id"]
-
-
-def _get_openai_client():
-    """Retrieve initialized OpenAI client if OPENAI_API_KEY is configured."""
-    api_key = os.environ.get("OPENAI_API_KEY", "").strip()
-    if not api_key:
-        return None
-    try:
-        from openai import OpenAI
-        return OpenAI(api_key=api_key)
-    except Exception:
-        return None
 
 
 @asynccontextmanager
@@ -824,9 +814,9 @@ def _extract_query_concepts(
 
     # Semantic Query Concept Resolution if direct token matching yields no matches
     if not matched and session_candidates:
-        # A. Try OpenAI semantic concept resolution if client available
-        client = _get_openai_client()
-        if client is not None:
+        # A. Try OpenAI semantic concept resolution via direct HTTPS
+        api_key = os.environ.get("OPENAI_API_KEY", "").strip()
+        if api_key:
             try:
                 candidate_names = [sc["name"] for sc in session_candidates]
                 sem_prompt = (
@@ -836,23 +826,41 @@ def _extract_query_concepts(
                     "Return ONLY a JSON array of matched concept names, e.g. [\"Aerodynamics\"]. "
                     "If none match, return []."
                 )
-                sem_resp = client.chat.completions.create(
-                    model="gpt-4o-mini",
-                    messages=[{"role": "user", "content": sem_prompt}],
-                    temperature=0.0,
+                headers = {
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                }
+                payload = {
+                    "model": "gpt-4o-mini",
+                    "messages": [{"role": "user", "content": sem_prompt}],
+                    "temperature": 0.0,
+                }
+                sem_resp = requests.post(
+                    "https://api.openai.com/v1/chat/completions",
+                    headers=headers,
+                    json=payload,
+                    timeout=30,
                 )
-                parsed_names = json.loads(sem_resp.choices[0].message.content.strip())
-                if isinstance(parsed_names, list):
-                    for pn in parsed_names:
-                        for sc in session_candidates:
-                            if sc["name"].lower() == str(pn).lower() or _slugify(sc["name"]) == _slugify(str(pn)):
-                                if sc["id"] not in seen_ids:
-                                    seen_ids.add(sc["id"])
-                                    matched.append({
-                                        "id": sc["id"],
-                                        "name": sc["name"],
-                                        "uri": sc["uri"],
-                                    })
+                if sem_resp.status_code == 200:
+                    sem_data = sem_resp.json()
+                    choices = sem_data.get("choices", [])
+                    if choices:
+                        sem_content = choices[0].get("message", {}).get("content", "").strip()
+                        if sem_content.startswith("```"):
+                            sem_content = re.sub(r"^```(?:json)?\s*", "", sem_content)
+                            sem_content = re.sub(r"\s*```$", "", sem_content)
+                        parsed_names = json.loads(sem_content.strip())
+                        if isinstance(parsed_names, list):
+                            for pn in parsed_names:
+                                for sc in session_candidates:
+                                    if sc["name"].lower() == str(pn).lower() or _slugify(sc["name"]) == _slugify(str(pn)):
+                                        if sc["id"] not in seen_ids:
+                                            seen_ids.add(sc["id"])
+                                            matched.append({
+                                                "id": sc["id"],
+                                                "name": sc["name"],
+                                                "uri": sc["uri"],
+                                            })
             except Exception:
                 pass
 
@@ -1110,9 +1118,9 @@ def _synthesize_hybrid_answer(
 
     concept_names = [c["name"] for c in matched_concepts]
 
-    # 4. Invoke OpenAI generative synthesis when OPENAI_API_KEY is available
-    client = _get_openai_client()
-    if client is not None:
+    # 4. Invoke OpenAI generative synthesis via direct HTTPS when OPENAI_API_KEY is available
+    api_key = os.environ.get("OPENAI_API_KEY", "").strip()
+    if api_key:
         try:
             triples_ctx = "\n".join(f"- {rp}" for rp in relation_phrases[:10]) if relation_phrases else "None"
             text_ctx = "\n\n".join(source_chunks) if source_chunks else (doc_summary or "")
@@ -1128,17 +1136,32 @@ def _synthesize_hybrid_answer(
                 f"Source Text Context:\n{text_ctx if text_ctx else 'None'}\n\n"
                 "Answer (concise 2–3 sentences):"
             )
-            resp = client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[
+            headers = {
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            }
+            payload = {
+                "model": "gpt-4o-mini",
+                "messages": [
                     {"role": "system", "content": system_msg},
                     {"role": "user", "content": user_msg},
                 ],
-                temperature=0.2,
+                "temperature": 0.2,
+                "max_tokens": 300,
+            }
+            resp = requests.post(
+                "https://api.openai.com/v1/chat/completions",
+                headers=headers,
+                json=payload,
+                timeout=30,
             )
-            llm_text = resp.choices[0].message.content.strip()
-            if llm_text:
-                return llm_text
+            if resp.status_code == 200:
+                result_data = resp.json()
+                choices = result_data.get("choices", [])
+                if choices:
+                    llm_text = choices[0].get("message", {}).get("content", "").strip()
+                    if llm_text:
+                        return llm_text
         except Exception:
             pass
 
@@ -1182,6 +1205,8 @@ def _synthesize_hybrid_answer(
         for ek in extra_keywords:
             if ek in s_lower:
                 score += 1.0
+        if any(term in s_lower for term in ["synonymous", "refer", "referred to", "known as", "means", "defined as"]):
+            score += 2.0
         return score
 
     scored = sorted(
@@ -1289,7 +1314,6 @@ def _extract_with_openai(text: str, model: str = "gpt-4o-mini") -> Optional[Dict
     if not api_key:
         return None
     try:
-        import requests
         sys_prompt = (
             "You are an expert knowledge graph engineer and pedagogical learning assistant. "
             "Analyze the given text to extract a comprehensive domain knowledge graph and high-yield active recall flashcards.\n\n"

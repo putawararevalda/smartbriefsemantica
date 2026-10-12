@@ -570,7 +570,7 @@ def test_f1_aerodynamics_query_and_chunk_grounding(client):
 
 
 def test_llm_hybrid_answer_synthesis(client, monkeypatch):
-    """Verify LLM hybrid answer synthesis with mock OpenAI completions."""
+    """Verify LLM hybrid answer synthesis with direct HTTPS requests.post mock."""
     from unittest.mock import MagicMock
 
     session_llm = "session_llm_synthesis"
@@ -581,18 +581,26 @@ def test_llm_hybrid_answer_synthesis(client, monkeypatch):
     proc_resp = client.post("/api/process", json={"text": proc_text, "session_id": session_llm})
     assert proc_resp.status_code == 200
 
-    mock_chat_completion = MagicMock()
-    mock_choice = MagicMock()
-    mock_choice.message.content = (
+    expected_content = (
         "Oxigraph operates as an embedded in-process graph engine that executes SPARQL queries directly within memory. "
         "It integrates with the Knowledge Graph to enable deterministic reasoning with minimal latency."
     )
-    mock_chat_completion.choices = [mock_choice]
 
-    mock_openai_client = MagicMock()
-    mock_openai_client.chat.completions.create.return_value = mock_chat_completion
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {
+        "choices": [
+            {
+                "message": {
+                    "content": expected_content,
+                }
+            }
+        ]
+    }
+    mock_post = MagicMock(return_value=mock_resp)
 
-    monkeypatch.setattr("main._get_openai_client", lambda: mock_openai_client)
+    monkeypatch.setattr("requests.post", mock_post)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-mock-llm-key")
 
     rag_payload = {
         "session_id": session_llm,
@@ -603,19 +611,130 @@ def test_llm_hybrid_answer_synthesis(client, monkeypatch):
     assert resp.status_code == 200
     data = resp.json()
 
-    assert mock_openai_client.chat.completions.create.called
-    call_kwargs = mock_openai_client.chat.completions.create.call_args[1]
-    assert call_kwargs["model"] == "gpt-4o-mini"
-    assert call_kwargs["temperature"] == 0.2
+    assert mock_post.called
+    call_args, call_kwargs = mock_post.call_args
+    assert call_args[0] == "https://api.openai.com/v1/chat/completions"
+    assert call_kwargs["headers"]["Authorization"] == "Bearer sk-mock-llm-key"
+    assert call_kwargs["headers"]["Content-Type"] == "application/json"
+
+    payload = call_kwargs["json"]
+    assert payload["model"] == "gpt-4o-mini"
+    assert payload["temperature"] == 0.2
+    assert payload["max_tokens"] == 300
 
     # Verify synthesized answer matches mock LLM completion
-    assert data["answer"] == mock_choice.message.content.strip()
+    assert data["answer"] == expected_content
 
     # Verify system prompts did not include infrastructure triples like extractedFrom or Document
-    messages = call_kwargs["messages"]
+    messages = payload["messages"]
     user_prompt = next(m["content"] for m in messages if m["role"] == "user")
     assert "extractedFrom" not in user_prompt
     assert "https://smartbrief.ai/ontology/Document" not in user_prompt
+
+
+def test_f1_teams_constructors_synthesis_direct_https(client, monkeypatch):
+    """Verify query 'what is the 1 or 2 word that can be used to refer to Formula One teams?' returns 'constructors'."""
+    from unittest.mock import MagicMock
+
+    session_id = "session_f1_constructors_test"
+    f1_article = (
+        "The Formula One World Championship consists of a series of races, known as Grands Prix, "
+        "held worldwide on purpose-built circuits and public roads. The results of each race are "
+        "evaluated using a points system to determine two annual World Championships: one for drivers, "
+        "and one for the constructors—now synonymous with teams. While most teams are based in the United Kingdom, "
+        "they compete globally under FIA sporting regulations."
+    )
+    proc_resp = client.post("/api/process", json={"text": f1_article, "session_id": session_id})
+    assert proc_resp.status_code == 200
+
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {
+        "choices": [
+            {
+                "message": {
+                    "content": "In Formula One, teams are commonly and officially referred to as constructors.",
+                }
+            }
+        ]
+    }
+    mock_post = MagicMock(return_value=mock_resp)
+    monkeypatch.setattr("requests.post", mock_post)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-mock-f1-key")
+
+    query = "what is the 1 or 2 word that can be used to refer to Formula One teams?"
+    rag_resp = client.post(
+        "/api/rag/query",
+        json={"session_id": session_id, "query": query, "top_k_triples": 10},
+    )
+    assert rag_resp.status_code == 200
+    data = rag_resp.json()
+    answer = data["answer"].lower()
+    assert "constructor" in answer or "constructors" in answer
+    assert mock_post.called
+
+
+def test_f1_teams_constructors_synthesis_heuristic_fallback(client, monkeypatch):
+    """Verify fallback sentence scoring also successfully prioritizes the definition sentence identifying constructors."""
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+    session_id = "session_f1_constructors_fallback"
+    f1_article = (
+        "The Formula One World Championship consists of a series of races, known as Grands Prix, "
+        "held worldwide on purpose-built circuits and public roads. The results of each race are "
+        "evaluated using a points system to determine two annual World Championships: one for drivers, "
+        "and one for the constructors—now synonymous with teams. While most teams are based in the United Kingdom, "
+        "they compete globally under FIA sporting regulations."
+    )
+    proc_resp = client.post("/api/process", json={"text": f1_article, "session_id": session_id})
+    assert proc_resp.status_code == 200
+
+    query = "what is the 1 or 2 word that can be used to refer to Formula One teams?"
+    rag_resp = client.post(
+        "/api/rag/query",
+        json={"session_id": session_id, "query": query, "top_k_triples": 10},
+    )
+    assert rag_resp.status_code == 200
+    data = rag_resp.json()
+    answer = data["answer"].lower()
+    assert "constructor" in answer or "constructors" in answer
+
+
+def test_extract_query_concepts_semantic_resolution_direct_https(client, monkeypatch):
+    """Verify _extract_query_concepts semantic resolution uses direct HTTPS requests.post without SDK."""
+    import json
+    from unittest.mock import MagicMock
+    import main
+
+    session_id = "session_semantic_concept_res"
+    text = (
+        "Aerodynamics engineering dictates vehicle stability through cornering. "
+        "Downforce allows the racecar to maintain grip."
+    )
+    proc_resp = client.post("/api/process", json={"text": text, "session_id": session_id})
+    assert proc_resp.status_code == 200
+
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {
+        "choices": [
+            {
+                "message": {
+                    "content": json.dumps(["Aerodynamics"]),
+                }
+            }
+        ]
+    }
+    mock_post = MagicMock(return_value=mock_resp)
+    monkeypatch.setattr("requests.post", mock_post)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-mock-sem-key")
+
+    matched = main._extract_query_concepts(
+        query="attacking the corners with maximum lateral speed",
+        store=main.oxigraph_store,
+        session_id=session_id,
+    )
+    assert any("aerodynamics" in c["name"].lower() for c in matched)
 
 
 def test_predicate_label_formatting():
