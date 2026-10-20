@@ -776,6 +776,7 @@ export default function DualPaneWorkspace({
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
                 {filteredConcepts.map((concept, cIdx) => {
                   const label = concept.label || concept.name || concept.id || `Concept ${cIdx + 1}`;
+                  const name = label;
                   const type = concept.type || 'Entity';
                   const description = concept.description || '';
                   const relations = concept.relations || [];
