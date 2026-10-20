@@ -30,7 +30,7 @@ const STAGES: StepInfo[] = [
   {
     step: 3,
     title: 'Synthesizing Flashcards & Reasoning Chains',
-    description: 'Generating active recall questions, answers, and distillation rules',
+    description: 'Constructing knowledge graph subgraphs, grounding semantic synthesis, and generating study deck items',
     icon: Sparkles,
   },
   {
@@ -139,11 +139,11 @@ export default function ProgressStepper({
               <span className="relative inline-flex rounded-full h-3 w-3 bg-blue-600"></span>
             </span>
             <h3 className="text-base font-bold text-slate-900">
-              Synthesizing Knowledge Graph & Provenance Lineage...
+              Constructing Knowledge Graph, Subgraph Grounding & Provenance Lineage...
             </h3>
           </div>
           <p className="text-xs text-slate-500 mt-1">
-            Analyzing semantic context, constructing Oxigraph triples, and sealing W3C PROV-O audit trails.
+            Extracting semantic entities, asserting Oxigraph RDF triples, grounding subgraph synthesis, and sealing W3C PROV-O audit trails.
           </p>
         </div>
 

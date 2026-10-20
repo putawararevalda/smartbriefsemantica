@@ -19,7 +19,9 @@ import {
   Sparkles,
   BookOpen,
   ArrowRight,
-  MessageSquare
+  MessageSquare,
+  ShieldCheck,
+  Database
 } from 'lucide-react';
 import { ProcessResponse, Flashcard, GraphConcept } from '@/types';
 import FlashcardDeck from './FlashcardDeck';
@@ -44,13 +46,53 @@ export default function DualPaneWorkspace({
   onTraceSource,
   documentTitle = 'Source Document',
 }: DualPaneWorkspaceProps) {
-  const [activeTab, setActiveTab] = useState<ActiveTab>('flashcards');
+  const [activeTab, setActiveTab] = useState<ActiveTab>('graph');
+  const [showFlashcards, setShowFlashcards] = useState<boolean>(false);
   const [mobileView, setMobileView] = useState<MobileView>('synthesis');
   const [activeCardIndex, setActiveCardIndex] = useState<number>(0);
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [conceptFilter, setConceptFilter] = useState<string>('');
   const [copiedSummary, setCopiedSummary] = useState<boolean>(false);
   const [highlightedConcept, setHighlightedConcept] = useState<string | null>(null);
+
+  // Hydrate Study Deck Mode preference from localStorage
+  useEffect(() => {
+    try {
+      const savedShowFlashcards = localStorage.getItem('smartbrief_show_flashcards');
+      const savedStudyDeckMode = localStorage.getItem('smartbrief_study_deck_mode');
+      if (savedShowFlashcards !== null) {
+        setShowFlashcards(savedShowFlashcards === 'true');
+      } else if (savedStudyDeckMode !== null) {
+        setShowFlashcards(savedStudyDeckMode === 'true');
+      }
+    } catch (err) {
+      console.error('Failed to read Study Deck Mode preference from localStorage:', err);
+    }
+  }, []);
+
+  // Automatically fall back to Knowledge Graph tab if Study Deck Mode is turned off while viewing flashcards
+  useEffect(() => {
+    if (!showFlashcards && activeTab === 'flashcards') {
+      setActiveTab('graph');
+    }
+  }, [showFlashcards, activeTab]);
+
+  // Toggle Study Deck Mode and persist preference in localStorage
+  const handleToggleStudyDeckMode = () => {
+    setShowFlashcards((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem('smartbrief_show_flashcards', String(next));
+        localStorage.setItem('smartbrief_study_deck_mode', String(next));
+      } catch (err) {
+        console.error('Failed to persist Study Deck Mode preference in localStorage:', err);
+      }
+      if (!next && activeTab === 'flashcards') {
+        setActiveTab('graph');
+      }
+      return next;
+    });
+  };
 
   const leftPaneScrollRef = useRef<HTMLDivElement>(null);
   const anchorRefs = useRef<Record<number, HTMLDivElement | null>>({});
@@ -353,66 +395,147 @@ export default function DualPaneWorkspace({
             mobileView === 'synthesis' ? 'block' : 'hidden lg:block'
           }`}
         >
-          {/* Sticky Tab Navigation Sub-Header */}
-          <div className="bg-white rounded-2xl p-2 sm:p-2.5 border border-slate-200/90 shadow-xs flex items-center justify-between gap-1 sm:gap-2">
+          {/* Sticky Tab Navigation & Study Deck Mode Sub-Header */}
+          <div className="bg-white rounded-2xl p-2 sm:p-3 border border-slate-200/90 shadow-xs space-y-2.5">
+            {/* Top Toolbar: Knowledge Graph Intelligence Stats & Study Deck Mode Toggle */}
+            <div className="flex flex-wrap items-center justify-between gap-2 px-1 pb-2 border-b border-slate-100">
+              {!showFlashcards ? (
+                <div
+                  className="flex flex-wrap items-center gap-2 sm:gap-3 text-xs text-slate-600"
+                  aria-label="Knowledge Graph intelligence status"
+                >
+                  <span className="inline-flex items-center gap-1.5 font-semibold text-slate-800 bg-slate-100/90 px-2.5 py-1 rounded-lg border border-slate-200/80">
+                    <Network className="w-3.5 h-3.5 text-indigo-600 pointer-events-none shrink-0" />
+                    <span>{concepts.length} Entities</span>
+                  </span>
+                  <span className="inline-flex items-center gap-1.5 font-semibold text-slate-800 bg-slate-100/90 px-2.5 py-1 rounded-lg border border-slate-200/80">
+                    <Database className="w-3.5 h-3.5 text-blue-600 pointer-events-none shrink-0" />
+                    <span>{tripletCount} Triples</span>
+                  </span>
+                  <span className="inline-flex items-center gap-1.5 font-semibold text-emerald-800 bg-emerald-50 px-2.5 py-1 rounded-lg border border-emerald-200/80">
+                    <ShieldCheck className="w-3.5 h-3.5 text-emerald-600 pointer-events-none shrink-0" />
+                    <span>100% PROV-O Grounded</span>
+                  </span>
+                </div>
+              ) : (
+                <div className="flex items-center gap-2 text-xs text-blue-700 font-semibold px-1">
+                  <BookOpen className="w-3.5 h-3.5 text-blue-600 pointer-events-none shrink-0" />
+                  <span>Active Recall Study Deck Enabled ({flashcards.length} Cards)</span>
+                </div>
+              )}
+
+              {/* Study Deck Mode Toggle Control */}
+              <div className="flex items-center gap-2 ml-auto">
+                <button
+                  type="button"
+                  role="switch"
+                  id="study-deck-mode-toggle"
+                  aria-checked={showFlashcards}
+                  aria-label="Toggle Study Deck Mode"
+                  onClick={handleToggleStudyDeckMode}
+                  className={`cursor-pointer group inline-flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-bold border transition-all focus:outline-none focus:ring-2 focus:ring-blue-500/30 ${
+                    showFlashcards
+                      ? 'bg-blue-50 text-blue-800 border-blue-200 shadow-xs'
+                      : 'bg-slate-50 text-slate-600 border-slate-200/90 hover:bg-slate-100 hover:text-slate-900'
+                  }`}
+                >
+                  <Layers className={`w-3.5 h-3.5 pointer-events-none shrink-0 ${showFlashcards ? 'text-blue-600' : 'text-slate-400'}`} />
+                  <span className="pointer-events-none select-none">Study Deck Mode</span>
+                  <span
+                    className={`relative inline-flex h-4 w-7 shrink-0 items-center rounded-full transition-colors duration-200 pointer-events-none ${
+                      showFlashcards ? 'bg-blue-600' : 'bg-slate-300'
+                    }`}
+                  >
+                    <span
+                      className={`inline-block h-3 w-3 transform rounded-full bg-white shadow-xs transition-transform duration-200 ${
+                        showFlashcards ? 'translate-x-3.5' : 'translate-x-0.5'
+                      }`}
+                    />
+                  </span>
+                </button>
+              </div>
+            </div>
+
+            {/* Tab Navigation List */}
             <div className="flex items-center gap-1 sm:gap-2 flex-1" role="tablist" aria-label="Synthesis and study hub tabs">
-              {/* Tab 1: Flashcards */}
+              {/* Tab 1: Knowledge Graph (Default Landing Tab) */}
               <button
                 type="button"
                 role="tab"
-                id="tab-flashcards"
-                aria-selected={activeTab === 'flashcards'}
-                aria-controls="tabpanel-flashcards"
-                onClick={() => handleTabChange('flashcards')}
-                className={`cursor-pointer flex-1 py-2 px-2.5 sm:px-3.5 rounded-xl text-xs sm:text-sm font-bold flex items-center justify-center gap-1.5 transition-all focus:outline-none focus:ring-2 focus:ring-blue-500/20 ${
-                  activeTab === 'flashcards'
+                id="tab-graph"
+                aria-selected={activeTab === 'graph'}
+                aria-controls="tabpanel-graph"
+                onClick={() => handleTabChange('graph')}
+                className={`cursor-pointer flex-1 py-2 px-2 sm:px-3 rounded-xl text-xs sm:text-sm font-bold flex items-center justify-center gap-1.5 transition-all focus:outline-none focus:ring-2 focus:ring-blue-500/20 ${
+                  activeTab === 'graph'
                     ? 'bg-blue-600 text-white shadow-sm'
                     : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
                 }`}
-                aria-label="Flashcards active recall deck tab"
+                aria-label="Knowledge Graph and Oxigraph triplestore tab"
               >
-                <Layers className="w-3.5 h-3.5 pointer-events-none shrink-0" />
-                <span className="pointer-events-none select-none">Flashcards</span>
+                <Share2 className="w-3.5 h-3.5 pointer-events-none shrink-0" />
+                <span className="pointer-events-none select-none">Graph</span>
                 <span
                   role="button"
                   tabIndex={0}
-                  onClick={(e) => handleBadgeClick('flashcards', e)}
+                  onClick={(e) => handleBadgeClick('graph', e)}
                   onKeyDown={(e) => {
                     if (e.key === 'Enter' || e.key === ' ') {
                       e.preventDefault();
                       e.stopPropagation();
-                      handleTabChange('flashcards');
+                      handleTabChange('graph');
                     }
                   }}
-                  aria-label={`View ${flashcards.length} flashcards`}
-                  title={`Click badge to view ${flashcards.length} flashcards`}
+                  aria-label={`View ${tripletCount} triples in Oxigraph`}
+                  title={`Click badge to view ${tripletCount} triples in Oxigraph`}
                   className={`cursor-pointer select-none text-[10px] font-mono px-1.5 py-0.5 rounded-full transition-all hover:scale-110 active:scale-95 ${
-                    activeTab === 'flashcards'
+                    activeTab === 'graph'
                       ? 'bg-blue-700/80 text-white shadow-xs hover:bg-blue-800'
                       : 'bg-slate-200 text-slate-700 hover:bg-slate-300'
                   }`}
                 >
-                  {flashcards.length}
+                  {tripletCount}
                 </span>
               </button>
 
-              {/* Tab 2: Executive Summary */}
+              {/* Tab 2: Ask Knowledge Graph (SMAR-14) */}
               <button
                 type="button"
                 role="tab"
-                id="tab-summary"
-                aria-selected={activeTab === 'summary'}
-                aria-controls="tabpanel-summary"
-                onClick={() => handleTabChange('summary')}
-                className={`cursor-pointer flex-1 py-2 px-2.5 sm:px-3.5 rounded-xl text-xs sm:text-sm font-bold flex items-center justify-center gap-1.5 transition-all focus:outline-none focus:ring-2 focus:ring-blue-500/20 ${
-                  activeTab === 'summary'
-                    ? 'bg-blue-600 text-white shadow-sm'
+                id="tab-qa"
+                aria-selected={activeTab === 'qa'}
+                aria-controls="tabpanel-qa"
+                onClick={() => handleTabChange('qa')}
+                className={`cursor-pointer flex-1 py-2 px-2 sm:px-3 rounded-xl text-xs sm:text-sm font-bold flex items-center justify-center gap-1.5 transition-all focus:outline-none focus:ring-2 focus:ring-indigo-500/20 ${
+                  activeTab === 'qa'
+                    ? 'bg-indigo-600 text-white shadow-sm'
                     : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
                 }`}
-                aria-label="Executive summary tab"
+                aria-label="Ask Knowledge Graph Q&A tab"
               >
-                <AlignLeft className="w-3.5 h-3.5 pointer-events-none shrink-0" />
-                <span className="pointer-events-none select-none">Summary</span>
+                <Sparkles className="w-3.5 h-3.5 pointer-events-none shrink-0" />
+                <span className="pointer-events-none select-none">Ask KG</span>
+                <span
+                  role="button"
+                  tabIndex={0}
+                  onClick={(e) => handleBadgeClick('qa', e)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      handleTabChange('qa');
+                    }
+                  }}
+                  aria-label="Ask Knowledge Graph Grounded Q&A"
+                  title="Ask Knowledge Graph Grounded Q&A"
+                  className={`cursor-pointer select-none text-[10px] font-mono px-1.5 py-0.5 rounded-full transition-all hover:scale-110 active:scale-95 ${
+                    activeTab === 'qa'
+                      ? 'bg-indigo-700/80 text-white shadow-xs hover:bg-indigo-800'
+                      : 'bg-indigo-100 text-indigo-700 hover:bg-indigo-200'
+                  }`}
+                >
+                  RAG
+                </span>
               </button>
 
               {/* Tab 3: Concept Matrix */}
@@ -455,90 +578,71 @@ export default function DualPaneWorkspace({
                 </span>
               </button>
 
-              {/* Tab 4: Knowledge Graph */}
+              {/* Tab 4: Executive Summary */}
               <button
                 type="button"
                 role="tab"
-                id="tab-graph"
-                aria-selected={activeTab === 'graph'}
-                aria-controls="tabpanel-graph"
-                onClick={() => handleTabChange('graph')}
-                className={`cursor-pointer flex-1 py-2 px-2 sm:px-3 rounded-xl text-xs sm:text-sm font-bold flex items-center justify-center gap-1.5 transition-all focus:outline-none focus:ring-2 focus:ring-blue-500/20 ${
-                  activeTab === 'graph'
+                id="tab-summary"
+                aria-selected={activeTab === 'summary'}
+                aria-controls="tabpanel-summary"
+                onClick={() => handleTabChange('summary')}
+                className={`cursor-pointer flex-1 py-2 px-2.5 sm:px-3.5 rounded-xl text-xs sm:text-sm font-bold flex items-center justify-center gap-1.5 transition-all focus:outline-none focus:ring-2 focus:ring-blue-500/20 ${
+                  activeTab === 'summary'
                     ? 'bg-blue-600 text-white shadow-sm'
                     : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
                 }`}
-                aria-label="Knowledge Graph and Oxigraph triplestore tab"
+                aria-label="Executive summary tab"
               >
-                <Share2 className="w-3.5 h-3.5 pointer-events-none shrink-0" />
-                <span className="pointer-events-none select-none">Graph</span>
-                <span
-                  role="button"
-                  tabIndex={0}
-                  onClick={(e) => handleBadgeClick('graph', e)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' || e.key === ' ') {
-                      e.preventDefault();
-                      e.stopPropagation();
-                      handleTabChange('graph');
-                    }
-                  }}
-                  aria-label={`View ${tripletCount} triples in Oxigraph`}
-                  title={`Click badge to view ${tripletCount} triples in Oxigraph`}
-                  className={`cursor-pointer select-none text-[10px] font-mono px-1.5 py-0.5 rounded-full transition-all hover:scale-110 active:scale-95 ${
-                    activeTab === 'graph'
-                      ? 'bg-blue-700/80 text-white shadow-xs hover:bg-blue-800'
-                      : 'bg-slate-200 text-slate-700 hover:bg-slate-300'
-                  }`}
-                >
-                  {tripletCount}
-                </span>
+                <AlignLeft className="w-3.5 h-3.5 pointer-events-none shrink-0" />
+                <span className="pointer-events-none select-none">Summary</span>
               </button>
 
-              {/* Tab 5: Ask Knowledge Graph (SMAR-14) */}
-              <button
-                type="button"
-                role="tab"
-                id="tab-qa"
-                aria-selected={activeTab === 'qa'}
-                aria-controls="tabpanel-qa"
-                onClick={() => handleTabChange('qa')}
-                className={`cursor-pointer flex-1 py-2 px-2 sm:px-3 rounded-xl text-xs sm:text-sm font-bold flex items-center justify-center gap-1.5 transition-all focus:outline-none focus:ring-2 focus:ring-indigo-500/20 ${
-                  activeTab === 'qa'
-                    ? 'bg-indigo-600 text-white shadow-sm'
-                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
-                }`}
-                aria-label="Ask Knowledge Graph Q&A tab"
-              >
-                <Sparkles className="w-3.5 h-3.5 pointer-events-none shrink-0" />
-                <span className="pointer-events-none select-none">Ask KG</span>
-                <span
-                  role="button"
-                  tabIndex={0}
-                  onClick={(e) => handleBadgeClick('qa', e)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' || e.key === ' ') {
-                      e.preventDefault();
-                      e.stopPropagation();
-                      handleTabChange('qa');
-                    }
-                  }}
-                  aria-label="Ask Knowledge Graph Grounded Q&A"
-                  title="Ask Knowledge Graph Grounded Q&A"
-                  className={`cursor-pointer select-none text-[10px] font-mono px-1.5 py-0.5 rounded-full transition-all hover:scale-110 active:scale-95 ${
-                    activeTab === 'qa'
-                      ? 'bg-indigo-700/80 text-white shadow-xs hover:bg-indigo-800'
-                      : 'bg-indigo-100 text-indigo-700 hover:bg-indigo-200'
+              {/* Tab 5: Flashcards (Conditionally rendered when Study Deck Mode is ON) */}
+              {showFlashcards && (
+                <button
+                  type="button"
+                  role="tab"
+                  id="tab-flashcards"
+                  aria-selected={activeTab === 'flashcards'}
+                  aria-controls="tabpanel-flashcards"
+                  onClick={() => handleTabChange('flashcards')}
+                  className={`cursor-pointer flex-1 py-2 px-2.5 sm:px-3.5 rounded-xl text-xs sm:text-sm font-bold flex items-center justify-center gap-1.5 transition-all focus:outline-none focus:ring-2 focus:ring-blue-500/20 ${
+                    activeTab === 'flashcards'
+                      ? 'bg-blue-600 text-white shadow-sm'
+                      : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
                   }`}
+                  aria-label="Flashcards active recall deck tab"
                 >
-                  RAG
-                </span>
-              </button>
+                  <Layers className="w-3.5 h-3.5 pointer-events-none shrink-0" />
+                  <span className="pointer-events-none select-none">Flashcards</span>
+                  <span
+                    role="button"
+                    tabIndex={0}
+                    onClick={(e) => handleBadgeClick('flashcards', e)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        handleTabChange('flashcards');
+                      }
+                    }}
+                    aria-label={`View ${flashcards.length} flashcards`}
+                    title={`Click badge to view ${flashcards.length} flashcards`}
+                    className={`cursor-pointer select-none text-[10px] font-mono px-1.5 py-0.5 rounded-full transition-all hover:scale-110 active:scale-95 ${
+                      activeTab === 'flashcards'
+                        ? 'bg-blue-700/80 text-white shadow-xs hover:bg-blue-800'
+                        : 'bg-slate-200 text-slate-700 hover:bg-slate-300'
+                    }`}
+                  >
+                    {flashcards.length}
+                  </span>
+                </button>
+              )}
             </div>
           </div>
 
-          {/* TAB 1: 3D FLIP FLASHCARD ACTIVE RECALL DECK */}
-          {activeTab === 'flashcards' && (
+          {/* TAB 1 (Conditional): 3D FLIP FLASHCARD ACTIVE RECALL DECK */}
+          {showFlashcards && activeTab === 'flashcards' && (
             <div
               id="tabpanel-flashcards"
               role="tabpanel"
@@ -755,7 +859,7 @@ export default function DualPaneWorkspace({
                             <Sparkles className="w-3 h-3" />
                             <span>Ask KG</span>
                           </button>
-                          {matchingFlashcardIdx !== -1 && (
+                          {showFlashcards && matchingFlashcardIdx !== -1 && (
                             <button
                               type="button"
                               onClick={(e) => {
