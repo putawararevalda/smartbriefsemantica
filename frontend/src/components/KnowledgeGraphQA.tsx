@@ -20,7 +20,7 @@ import {
   X
 } from 'lucide-react';
 import { GraphConcept, RAGChatMessage, RAGQueryResponse, GraphContext, RAGProvenance } from '@/types';
-import SubgraphEvidenceDrawer from './SubgraphEvidenceDrawer';
+import SubgraphEvidenceDrawer, { isInfrastructureTriple } from './SubgraphEvidenceDrawer';
 
 export interface KnowledgeGraphQAProps {
   sessionId: string;
@@ -284,7 +284,9 @@ export default function KnowledgeGraphQA({
         {/* Message Stream */}
         {messages.map((msg) => {
           const isUser = msg.role === 'user';
-          const tripleCount = msg.graph_context?.retrieved_triples?.length ?? 0;
+          const tripleCount = (msg.graph_context?.retrieved_triples || []).filter(
+            (t) => !isInfrastructureTriple(t)
+          ).length;
           const matchedCount = msg.graph_context?.matched_concepts?.length ?? 0;
 
           return (

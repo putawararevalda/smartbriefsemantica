@@ -29,6 +29,28 @@ export interface SubgraphEvidenceDrawerProps {
   query?: string;
 }
 
+export function isInfrastructureTriple(triple: {
+  subject?: string;
+  predicate?: string;
+  object?: string;
+  raw_triple?: string;
+}): boolean {
+  const s = triple.subject || '';
+  const p = triple.predicate || '';
+  const o = triple.object || '';
+  const raw = triple.raw_triple || '';
+  if (p.includes('extractedFrom') || raw.includes('extractedFrom')) return true;
+  if (
+    s.startsWith('urn:smartbrief:doc:') ||
+    o.startsWith('urn:smartbrief:doc:') ||
+    raw.includes('urn:smartbrief:doc:')
+  ) {
+    return true;
+  }
+  if (o.endsWith('/Document') || o.includes('ontology/Document')) return true;
+  return false;
+}
+
 export default function SubgraphEvidenceDrawer({
   isOpen,
   onClose,
@@ -66,7 +88,10 @@ export default function SubgraphEvidenceDrawer({
   }, [isOpen]);
 
   const matchedConcepts = graphContext?.matched_concepts || [];
-  const retrievedTriples = graphContext?.retrieved_triples || [];
+  const retrievedTriples = useMemo(
+    () => (graphContext?.retrieved_triples || []).filter((t) => !isInfrastructureTriple(t)),
+    [graphContext?.retrieved_triples]
+  );
   const traversalHops = graphContext?.traversal_hops ?? 2;
   const executionTimeMs = graphContext?.execution_time_ms ?? 0;
 

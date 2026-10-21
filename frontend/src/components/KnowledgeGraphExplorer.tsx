@@ -56,6 +56,20 @@ const PRESET_SPARQL_QUERIES = [
   },
 ];
 
+export function isInfrastructureTriple(triple: {
+  subject?: string;
+  predicate?: string;
+  object?: string;
+}): boolean {
+  const s = triple.subject || '';
+  const p = triple.predicate || '';
+  const o = triple.object || '';
+  if (p.includes('extractedFrom')) return true;
+  if (s.startsWith('urn:smartbrief:doc:') || o.startsWith('urn:smartbrief:doc:')) return true;
+  if (o.endsWith('/Document') || o.includes('ontology/Document')) return true;
+  return false;
+}
+
 export default function KnowledgeGraphExplorer({
   graph,
   concepts = [],
@@ -69,8 +83,12 @@ export default function KnowledgeGraphExplorer({
 
   // Triplets store state
   const [triplets, setTriplets] = useState<TripletItem[]>(() => {
-    if (graph?.triplets && graph.triplets.length > 0) return graph.triplets;
-    if (initialTriplets && initialTriplets.length > 0) return initialTriplets;
+    if (graph?.triplets && graph.triplets.length > 0) {
+      return graph.triplets.filter((t) => !isInfrastructureTriple(t));
+    }
+    if (initialTriplets && initialTriplets.length > 0) {
+      return initialTriplets.filter((t) => !isInfrastructureTriple(t));
+    }
     return [];
   });
   const [tripletsSearch, setTripletsSearch] = useState<string>('');
@@ -131,9 +149,9 @@ export default function KnowledgeGraphExplorer({
   // Sync triplets on prop update
   useEffect(() => {
     if (graph?.triplets && graph.triplets.length > 0) {
-      setTriplets(graph.triplets);
+      setTriplets(graph.triplets.filter((t) => !isInfrastructureTriple(t)));
     } else if (initialTriplets && initialTriplets.length > 0) {
-      setTriplets(initialTriplets);
+      setTriplets(initialTriplets.filter((t) => !isInfrastructureTriple(t)));
     }
   }, [graph?.triplets, initialTriplets]);
 
@@ -212,9 +230,10 @@ export default function KnowledgeGraphExplorer({
 
   // Filtered triplets for triplestore table
   const filteredTriplets = useMemo(() => {
-    if (!tripletsSearch.trim()) return triplets;
+    const domainTriplets = triplets.filter((t) => !isInfrastructureTriple(t));
+    if (!tripletsSearch.trim()) return domainTriplets;
     const q = tripletsSearch.toLowerCase();
-    return triplets.filter(
+    return domainTriplets.filter(
       (t) =>
         t.subject.toLowerCase().includes(q) ||
         t.predicate.toLowerCase().includes(q) ||
@@ -230,7 +249,7 @@ export default function KnowledgeGraphExplorer({
       if (res.ok) {
         const data = await res.json();
         if (Array.isArray(data.triplets)) {
-          setTriplets(data.triplets);
+          setTriplets(data.triplets.filter((t: TripletItem) => !isInfrastructureTriple(t)));
         }
       }
     } catch (err) {
