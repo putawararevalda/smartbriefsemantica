@@ -916,6 +916,17 @@ def _extract_query_concepts(
     return matched
 
 
+def _is_infrastructure_triple(subject: str, predicate: str, obj: str) -> bool:
+    """Return True if a triple is internal bookkeeping metadata (e.g., extractedFrom or Document root)."""
+    if "extractedFrom" in predicate:
+        return True
+    if subject.startswith("urn:smartbrief:doc:") or obj.startswith("urn:smartbrief:doc:"):
+        return True
+    if obj.endswith("Document") or "ontology/Document" in obj:
+        return True
+    return False
+
+
 def _traverse_subgraph(
     concept_uris: List[str],
     store: OxigraphStore,
@@ -937,24 +948,33 @@ def _traverse_subgraph(
         return []
 
     start_clause = " ".join(f"<{u}>" for u in valid_uris)
+    sparql_limit = max(limit * 3, 30)
 
     if session_id:
         doc_uri = f"urn:smartbrief:doc:{session_id}"
         session_filter = f"""
         FILTER(
-            (?p = <https://smartbrief.ai/ontology/extractedFrom> && (?o = <{doc_uri}> || ?s = <{doc_uri}>)) ||
-            (?p = <http://www.w3.org/1999/02/22-rdf-syntax-ns#type>) ||
+            ?p != <https://smartbrief.ai/ontology/extractedFrom> &&
+            !STRSTARTS(STR(?s), "urn:smartbrief:doc:") &&
+            !STRSTARTS(STR(?o), "urn:smartbrief:doc:") &&
+            EXISTS {{ ?s <https://smartbrief.ai/ontology/extractedFrom> <{doc_uri}> }} &&
             (
-                ?p != <https://smartbrief.ai/ontology/extractedFrom> &&
-                (EXISTS {{ ?s <https://smartbrief.ai/ontology/extractedFrom> <{doc_uri}> }} || ?s = <{doc_uri}>) &&
-                (EXISTS {{ ?o <https://smartbrief.ai/ontology/extractedFrom> <{doc_uri}> }} || ?o = <{doc_uri}> || isLiteral(?o))
+                ?p = <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> ||
+                EXISTS {{ ?o <https://smartbrief.ai/ontology/extractedFrom> <{doc_uri}> }} ||
+                isLiteral(?o)
             )
         )
         """
-        mid_filter = f"FILTER(EXISTS {{ ?mid <https://smartbrief.ai/ontology/extractedFrom> <{doc_uri}> }})"
+        mid_filter = f"FILTER(?p1 != <https://smartbrief.ai/ontology/extractedFrom> && EXISTS {{ ?mid <https://smartbrief.ai/ontology/extractedFrom> <{doc_uri}> }})"
     else:
-        session_filter = ""
-        mid_filter = ""
+        session_filter = """
+        FILTER(
+            ?p != <https://smartbrief.ai/ontology/extractedFrom> &&
+            !STRSTARTS(STR(?s), "urn:smartbrief:doc:") &&
+            !STRSTARTS(STR(?o), "urn:smartbrief:doc:")
+        )
+        """
+        mid_filter = "FILTER(?p1 != <https://smartbrief.ai/ontology/extractedFrom>)"
 
     if hops <= 1:
         sparql_query = f"""
@@ -968,7 +988,7 @@ def _traverse_subgraph(
                 BIND(?start AS ?o)
             }}
             {session_filter}
-        }} LIMIT {limit}
+        }} LIMIT {sparql_limit}
         """
     else:
         sparql_query = f"""
@@ -994,7 +1014,7 @@ def _traverse_subgraph(
                 {mid_filter}
             }}
             {session_filter}
-        }} LIMIT {limit}
+        }} LIMIT {sparql_limit}
         """
 
     try:
@@ -1010,15 +1030,8 @@ def _traverse_subgraph(
         p_val = b.get("p", {}).get("value", "")
         o_val = b.get("o", {}).get("value", "")
 
-        # Enforce cross-session isolation if session_id is provided
-        if session_id:
-            expected_doc = f"urn:smartbrief:doc:{session_id}"
-            if s_val.startswith("urn:smartbrief:doc:") and s_val != expected_doc:
-                continue
-            if o_val.startswith("urn:smartbrief:doc:") and o_val != expected_doc:
-                continue
-            if p_val == "https://smartbrief.ai/ontology/extractedFrom" and o_val != expected_doc:
-                continue
+        if _is_infrastructure_triple(s_val, p_val, o_val):
+            continue
 
         key = (s_val, p_val, o_val)
         if key in seen:
@@ -1095,18 +1108,15 @@ def _synthesize_hybrid_answer(
         source_chunks = [c["content"] for c in chunk_records]
 
     # 2. Filter out infrastructure/system triples from user-facing answer synthesis
-    clean_triples = []
-    for t in retrieved_triples:
-        pred = t.get("predicate", "")
-        obj = t.get("object", "")
-        subj = t.get("subject", "")
-        if "extractedFrom" in pred:
-            continue
-        if obj.endswith("Document") or "ontology/Document" in obj:
-            continue
-        if subj.startswith("urn:smartbrief:doc:"):
-            continue
-        clean_triples.append(t)
+    clean_triples = [
+        t
+        for t in retrieved_triples
+        if not _is_infrastructure_triple(
+            t.get("subject", ""),
+            t.get("predicate", ""),
+            t.get("object", ""),
+        )
+    ]
 
     # 3. Format relational sentences with cleaned predicate labels
     relation_phrases = []
@@ -1664,9 +1674,18 @@ async def process_article(payload: ProcessRequest):
             )
 
     # Query Oxigraph with SPARQL to demonstrate embedded query capability
-    sparql_query = "SELECT ?s ?p ?o WHERE { ?s ?p ?o } LIMIT 10"
+    sparql_query = "SELECT ?s ?p ?o WHERE { ?s ?p ?o } LIMIT 30"
     sparql_exec = oxigraph_store.execute_sparql(sparql_query)
-    sparql_sample = sparql_exec.get("bindings", []) if isinstance(sparql_exec, dict) else []
+    raw_sparql_bindings = sparql_exec.get("bindings", []) if isinstance(sparql_exec, dict) else []
+    sparql_sample = [
+        b
+        for b in raw_sparql_bindings
+        if not _is_infrastructure_triple(
+            b.get("s", {}).get("value", ""),
+            b.get("p", {}).get("value", ""),
+            b.get("o", {}).get("value", ""),
+        )
+    ][:10]
 
     # 4. Generate 3 Q&A Flashcards anchored to graph nodes
     flashcard_objects: List[Flashcard] = []
@@ -1745,16 +1764,8 @@ async def process_article(payload: ProcessRequest):
             )
         )
 
-    # Compile session triplets asserted into Oxigraph
+    # Compile domain session triplets (excluding internal bookkeeping triples)
     session_triplets: List[TripletItem] = []
-    session_triplets.append(
-        TripletItem(
-            subject=root_triplet.subject,
-            predicate=root_triplet.predicate,
-            object=root_triplet.object,
-            confidence=1.0,
-        )
-    )
     for idx, c in enumerate(raw_concepts):
         concept_slug = _slugify(c["name"])
         concept_uri = f"https://smartbrief.ai/concept/{concept_slug}"
@@ -1763,14 +1774,6 @@ async def process_article(payload: ProcessRequest):
                 subject=concept_uri,
                 predicate="http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
                 object=f"https://smartbrief.ai/ontology/{_slugify(c['category'])}",
-                confidence=1.0,
-            )
-        )
-        session_triplets.append(
-            TripletItem(
-                subject=concept_uri,
-                predicate="https://smartbrief.ai/ontology/extractedFrom",
-                object=doc_id,
                 confidence=1.0,
             )
         )
@@ -1840,7 +1843,11 @@ async def get_all_triplets():
     if oxigraph_store is None:
         oxigraph_store = OxigraphStore()
 
-    raw_triplets = oxigraph_store.get_triplets()
+    raw_triplets = [
+        t
+        for t in oxigraph_store.get_triplets()
+        if not _is_infrastructure_triple(t.subject, t.predicate, t.object)
+    ]
     triplet_items = [
         TripletItem(
             subject=t.subject,
@@ -1849,6 +1856,7 @@ async def get_all_triplets():
             confidence=getattr(t, "confidence", 1.0) or 1.0,
         )
         for t in raw_triplets
+        if not _is_infrastructure_triple(t.subject, t.predicate, t.object)
     ]
     return AllTripletsResponse(
         total_triplets=len(triplet_items),
@@ -1915,7 +1923,11 @@ async def export_graph_turtle():
     if oxigraph_store is None:
         oxigraph_store = OxigraphStore()
 
-    raw_triplets = oxigraph_store.get_triplets()
+    raw_triplets = [
+        t
+        for t in oxigraph_store.get_triplets()
+        if not _is_infrastructure_triple(t.subject, t.predicate, t.object)
+    ]
     turtle_lines = [
         "# SmartBrief Knowledge Graph - W3C Turtle Export",
         f"# Exported At: {datetime.now(timezone.utc).isoformat()}",

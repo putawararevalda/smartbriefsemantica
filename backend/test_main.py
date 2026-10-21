@@ -750,3 +750,63 @@ def test_predicate_label_formatting():
     assert _clean_predicate_label("https://smartbrief.ai/ontology/partOf") == "is part of"
 
 
+def test_no_infrastructure_triples_in_ui_responses(client):
+    """Verify internal extractedFrom and Document bookkeeping triples are filtered from API responses (SMAR-19)."""
+    session_id = "proc_46bfc985"
+    env_article = (
+        "Environmental economics analyzes the financial impact of environmental policies and market externalities. "
+        "Carbon pricing mechanisms, such as emissions trading systems and carbon taxes, internalize the social cost "
+        "of greenhouse gas emissions and incentivize transition toward a circular economy and renewable energy."
+    )
+
+    # 1. Process article and verify graph.triplets & sparql_sample exclude bookkeeping triples
+    proc_resp = client.post("/api/process", json={"text": env_article, "session_id": session_id})
+    assert proc_resp.status_code == 200
+    proc_data = proc_resp.json()
+
+    graph_triplets = proc_data["graph"]["triplets"]
+    assert len(graph_triplets) > 0
+    for t in graph_triplets:
+        assert "extractedFrom" not in t["predicate"]
+        assert not t["subject"].startswith("urn:smartbrief:doc:")
+        assert not t["object"].startswith("urn:smartbrief:doc:")
+        assert not t["object"].endswith("/Document")
+
+    for b in proc_data["graph"]["sparql_sample"]:
+        assert "extractedFrom" not in b.get("p", {}).get("value", "")
+        assert not b.get("s", {}).get("value", "").startswith("urn:smartbrief:doc:")
+        assert not b.get("o", {}).get("value", "").startswith("urn:smartbrief:doc:")
+
+    # 2. Query RAG endpoint and verify retrieved_triples exclude extractedFrom and Document URNs
+    first_concept = proc_data["concepts"][0]["name"]
+    rag_resp = client.post(
+        "/api/rag/query",
+        json={"session_id": session_id, "query": f"Tell me about {first_concept}", "top_k_triples": 15},
+    )
+    assert rag_resp.status_code == 200
+    rag_data = rag_resp.json()
+    retrieved_triples = rag_data["graph_context"]["retrieved_triples"]
+    assert len(retrieved_triples) > 0
+    for rt in retrieved_triples:
+        assert "extractedFrom" not in rt["predicate"]
+        assert not rt["subject"].startswith("urn:smartbrief:doc:")
+        assert not rt["object"].startswith("urn:smartbrief:doc:")
+        assert "extractedFrom" not in rt["raw_triple"]
+        assert f"urn:smartbrief:doc:{session_id}" not in rt["raw_triple"]
+
+    # 3. Verify GET /api/graph/triplets and GET /api/graph/export exclude bookkeeping triples
+    all_triplets_resp = client.get("/api/graph/triplets")
+    assert all_triplets_resp.status_code == 200
+    for t in all_triplets_resp.json()["triplets"]:
+        assert "extractedFrom" not in t["predicate"]
+        assert not t["subject"].startswith("urn:smartbrief:doc:")
+        assert not t["object"].startswith("urn:smartbrief:doc:")
+
+    export_resp = client.get("/api/graph/export")
+    assert export_resp.status_code == 200
+    export_content = export_resp.json()["content"]
+    assert "extractedFrom" not in export_content
+    assert "urn:smartbrief:doc:" not in export_content
+
+
+
