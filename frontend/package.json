@@ -7,7 +7,7 @@
     "build": "next build",
     "start": "next start -p 3003",
     "lint": "next lint",
-    "test": "node --test tests/api_and_components.test.mjs tests/sprint1_ingestion_and_stepper.test.mjs tests/sprint2_dual_pane_and_deck.test.mjs tests/qa_sprint2_verification.test.mjs tests/smar10_badge_and_tab_clickability.test.mjs tests/qa_smar10_full_regression.test.mjs tests/knowledge_graph_explorer.test.mjs tests/graphrag_qa_interface.test.mjs tests/qa_smar14_verification.test.mjs tests/smar18_kg_default_and_study_deck_toggle.test.mjs tests/qa_smar18_verification.test.mjs tests/smar19_infrastructure_triple_filtering.test.mjs tests/smar20_env_badge_and_concept_fallback.test.mjs"
+    "test": "node --test tests/api_and_components.test.mjs tests/sprint1_ingestion_and_stepper.test.mjs tests/sprint2_dual_pane_and_deck.test.mjs tests/qa_sprint2_verification.test.mjs tests/smar10_badge_and_tab_clickability.test.mjs tests/qa_smar10_full_regression.test.mjs tests/knowledge_graph_explorer.test.mjs tests/graphrag_qa_interface.test.mjs tests/qa_smar14_verification.test.mjs tests/smar18_kg_default_and_study_deck_toggle.test.mjs tests/qa_smar18_verification.test.mjs tests/smar19_infrastructure_triple_filtering.test.mjs tests/smar20_env_badge_and_concept_fallback.test.mjs tests/smar21_conditional_citation_anchor.test.mjs tests/qa_smar21_verification.test.mjs"
   },
   "dependencies": {
     "clsx": "^2.1.1",

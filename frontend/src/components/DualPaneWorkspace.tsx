@@ -154,14 +154,14 @@ export default function DualPaneWorkspace({
     return snippet.length >= 15 && normP.includes(snippet);
   };
 
-  // Auto-scroll left pane to active provenance anchor when card index changes
+  // Auto-scroll left pane to active provenance anchor when card index changes (only in Study Deck Mode)
   useEffect(() => {
-    if (activeTab !== 'flashcards') return;
+    if (!showFlashcards || activeTab !== 'flashcards') return;
     const targetEl = anchorRefs.current[activeCardIndex];
     if (targetEl && leftPaneScrollRef.current) {
       targetEl.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     }
-  }, [activeCardIndex, activeTab]);
+  }, [activeCardIndex, activeTab, showFlashcards]);
  
   // Tab switching and contextual scroll/reset action
   const handleTabChange = (tab: ActiveTab) => {
@@ -327,7 +327,8 @@ export default function DualPaneWorkspace({
             className="p-5 sm:p-6 overflow-y-auto max-h-[750px] lg:h-[calc(100vh-210px)] min-h-[500px] scroll-smooth space-y-4 text-slate-700 font-sans leading-relaxed text-sm sm:text-base"
           >
             {paragraphs.map((para, idx) => {
-              const isAnchor = isParagraphProvenanceAnchor(para);
+              // Active citation anchor is only active when Study Deck Mode is enabled
+              const isAnchor = showFlashcards && isParagraphProvenanceAnchor(para);
               if (isAnchor) {
                 anchorRefs.current[activeCardIndex] = leftPaneScrollRef.current
                   ? (leftPaneScrollRef.current.querySelector(`#para-anchor-${idx}`) as HTMLDivElement)
