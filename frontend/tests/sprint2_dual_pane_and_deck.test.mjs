@@ -41,6 +41,12 @@ test('Sprint 2: Dual-Pane Workspace & Interactive Active Recall Study Deck', asy
     assert.match(content, /isParagraphProvenanceAnchor|source_excerpt|source_text|Active Citation Anchor/i,
       'Must implement semantic highlighting anchor for provenance excerpt');
 
+    // Conditional citation anchor highlighting and badge based on Study Deck Mode (SMAR-21)
+    assert.match(content, /isAnchor\s*=\s*showFlashcards\s*&&\s*isParagraphProvenanceAnchor/i,
+      'Citation anchor matching must be conditioned on Study Deck Mode (showFlashcards)');
+    assert.match(content, /!showFlashcards\s*\|\|\s*activeTab\s*!==\s*'flashcards'/i,
+      'Auto-scroll to active citation anchor must only run when Study Deck Mode is active and viewing flashcards');
+
     // Independent smooth scrolling and typography
     assert.match(content, /overflow-y-auto/i, 'Left pane must have independent scrolling');
     assert.match(content, /scroll-smooth/i, 'Left pane must support smooth scrolling');
@@ -151,6 +157,30 @@ test('Sprint 2: Dual-Pane Workspace & Interactive Active Recall Study Deck', asy
 
     // Text overflow: internal scrolling container
     assert.match(content, /overflow-y-auto/i, 'Faces must scroll internally for long text/code without breaking 3D transform');
+  });
+
+  await t.test('SMAR-21: Citation Anchor Badge and Highlight Suppressed when Study Deck Mode is OFF', () => {
+    const content = fs.readFileSync(dualPanePath, 'utf-8');
+
+    // Condition isAnchor on showFlashcards
+    assert.match(content, /const\s+isAnchor\s*=\s*showFlashcards\s*&&\s*isParagraphProvenanceAnchor\(para\)/,
+      'isAnchor must be conditioned on showFlashcards being true');
+
+    // Active Citation Anchor badge conditioned on isAnchor
+    assert.match(content, /\{isAnchor\s*&&\s*\(\s*<div[^>]*>[\s\S]*?Active Citation Anchor\s*&bull;\s*Card \{activeCardIndex \+ 1\}<\/span>/,
+      'Active Citation Anchor badge must be conditionally rendered only when isAnchor is true');
+
+    // Provenance border and background highlight conditioned on isAnchor
+    assert.match(content, /isAnchor\s*\?\s*['"]bg-indigo-50\/90 border-l-4 border-indigo-600 shadow-xs ring-1 ring-indigo-200\/70['"]/,
+      'Citation anchor highlight (bg-indigo-50/90 border-l-4 border-indigo-600) must only be applied when isAnchor is true');
+
+    // Auto-scrolling left pane guarded by showFlashcards and activeTab === 'flashcards'
+    assert.match(content, /if\s*\(!showFlashcards\s*\|\|\s*activeTab\s*!==\s*'flashcards'\)\s*return;/,
+      'Auto-scroll left pane to active provenance anchor must only run when showFlashcards && activeTab === "flashcards"');
+
+    // Concept match and search highlighting remain functional
+    assert.match(content, /!isAnchor\s*&&\s*isConceptMatch/,
+      'Concept match badge must continue to function independently when citation anchor is not active');
   });
 
   await t.test('Home page integrates DualPaneWorkspace without below-the-fold scroll', () => {
