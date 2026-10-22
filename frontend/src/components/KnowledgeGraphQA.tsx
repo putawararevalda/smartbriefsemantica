@@ -38,6 +38,7 @@ export default function KnowledgeGraphQA({
   const [messages, setMessages] = useState<RAGChatMessage[]>([]);
   const [inputQuery, setInputQuery] = useState<string>('');
   const [isLoading, setIsLoading] = useState<boolean>(false);
+  const [loadingStep, setLoadingStep] = useState<number>(1);
   const [errorToast, setErrorToast] = useState<{ message: string; isExpired?: boolean } | null>(null);
 
   // Subgraph Evidence Drawer state
@@ -50,6 +51,22 @@ export default function KnowledgeGraphQA({
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+
+  // Cycle loading traversal pipeline stages (SMAR-22)
+  useEffect(() => {
+    let interval: NodeJS.Timeout | undefined;
+    if (isLoading) {
+      setLoadingStep(1);
+      interval = setInterval(() => {
+        setLoadingStep((prev) => (prev >= 3 ? 1 : prev + 1));
+      }, 700);
+    } else {
+      setLoadingStep(1);
+    }
+    return () => {
+      if (interval) clearInterval(interval);
+    };
+  }, [isLoading]);
 
   // Auto-scroll to bottom of chat
   useEffect(() => {
@@ -288,6 +305,13 @@ export default function KnowledgeGraphQA({
             (t) => !isInfrastructureTriple(t)
           ).length;
           const matchedCount = msg.graph_context?.matched_concepts?.length ?? 0;
+          const firstConceptLabel =
+            msg.graph_context?.matched_concepts?.[0]?.name ||
+            msg.graph_context?.matched_concepts?.[0]?.id ||
+            concepts[0]?.name ||
+            concepts[0]?.label ||
+            'Concept Grounding';
+          const traversalHops = msg.graph_context?.traversal_hops ?? 2;
 
           return (
             <div
@@ -307,6 +331,92 @@ export default function KnowledgeGraphQA({
                     : 'bg-white border border-slate-200/90 text-slate-800 rounded-bl-xs shadow-xs'
                 }`}
               >
+                {/* Completed Hop Stepper Breadcrumb (SMAR-22) */}
+                {!isUser && msg.graph_context && (
+                  <div
+                    role="region"
+                    aria-label="Knowledge Graph Traversal Hop Breadcrumb"
+                    className="p-2 sm:p-2.5 bg-indigo-50/80 border border-indigo-200 rounded-xl text-indigo-900 text-xs shadow-2xs space-y-1.5"
+                  >
+                    <div className="flex items-center justify-between gap-2 text-[10px] font-semibold text-indigo-700 uppercase tracking-wider">
+                      <span className="flex items-center gap-1">
+                        <Sparkles className="w-3 h-3 text-indigo-600" />
+                        Traversal Hop Stepper
+                      </span>
+                      <span className="text-[10px] font-normal text-indigo-500 lowercase">
+                        click to inspect evidence
+                      </span>
+                    </div>
+
+                    <div className="flex items-center flex-wrap gap-1 sm:gap-1.5">
+                      {/* Node 1: Matched Concept(s) */}
+                      <button
+                        type="button"
+                        onClick={() => handleOpenEvidence(msg)}
+                        title={`Matched Concept: ${firstConceptLabel}. Click to open evidence drawer.`}
+                        aria-label={`Matched Concept: ${firstConceptLabel}`}
+                        className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-white border border-indigo-200/90 text-indigo-950 font-semibold hover:bg-indigo-100 hover:border-indigo-300 transition-all cursor-pointer shadow-2xs hover:scale-[1.02] active:scale-95 animate-in fade-in slide-in-from-left duration-300 motion-reduce:animate-none motion-reduce:transition-none motion-reduce:hover:scale-100"
+                      >
+                        <span className="text-xs">🌱</span>
+                        <span className="truncate max-w-[130px] sm:max-w-[160px]">{firstConceptLabel}</span>
+                        {matchedCount > 1 && (
+                          <span className="text-[10px] text-indigo-600 bg-indigo-100/80 px-1 py-0.2 rounded font-normal">
+                            +{matchedCount - 1}
+                          </span>
+                        )}
+                      </button>
+
+                      {/* Hop 1 Connector */}
+                      <button
+                        type="button"
+                        onClick={() => handleOpenEvidence(msg)}
+                        title="1-Hop SPARQL expansion. Click to inspect."
+                        aria-label="1-Hop Traversal"
+                        className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full text-[10px] font-bold text-indigo-600 bg-indigo-100/70 border border-indigo-200 hover:bg-indigo-200/80 transition-all cursor-pointer animate-in fade-in slide-in-from-left duration-300 delay-75 motion-reduce:animate-none motion-reduce:transition-none"
+                      >
+                        <span>1-Hop</span>
+                        <ArrowRight className="w-2.5 h-2.5 text-indigo-500" />
+                      </button>
+
+                      {/* Node 2: Traversed Triples */}
+                      <button
+                        type="button"
+                        onClick={() => handleOpenEvidence(msg)}
+                        title={`${tripleCount} Traversed Triples. Click to open evidence drawer.`}
+                        aria-label={`${tripleCount} Traversed Triples`}
+                        className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-white border border-indigo-200/90 text-indigo-950 font-semibold hover:bg-indigo-100 hover:border-indigo-300 transition-all cursor-pointer shadow-2xs hover:scale-[1.02] active:scale-95 animate-in fade-in slide-in-from-left duration-300 delay-150 motion-reduce:animate-none motion-reduce:transition-none motion-reduce:hover:scale-100"
+                      >
+                        <span className="text-xs">🔗</span>
+                        <span>{tripleCount} Triples</span>
+                      </button>
+
+                      {/* Hop 2 Connector */}
+                      <button
+                        type="button"
+                        onClick={() => handleOpenEvidence(msg)}
+                        title={`${traversalHops}-Hop expansion. Click to inspect.`}
+                        aria-label={`${traversalHops}-Hop Traversal`}
+                        className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full text-[10px] font-bold text-indigo-600 bg-indigo-100/70 border border-indigo-200 hover:bg-indigo-200/80 transition-all cursor-pointer animate-in fade-in slide-in-from-left duration-300 delay-200 motion-reduce:animate-none motion-reduce:transition-none"
+                      >
+                        <span>{traversalHops}-Hop</span>
+                        <ArrowRight className="w-2.5 h-2.5 text-indigo-500" />
+                      </button>
+
+                      {/* Node 3: Evidence Subgraph */}
+                      <button
+                        type="button"
+                        onClick={() => handleOpenEvidence(msg)}
+                        title="Evidence Subgraph. Click to open evidence drawer."
+                        aria-label="Evidence Subgraph"
+                        className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-indigo-600 border border-indigo-700 text-white font-semibold hover:bg-indigo-700 transition-all cursor-pointer shadow-2xs hover:scale-[1.02] active:scale-95 animate-in fade-in slide-in-from-left duration-300 delay-300 motion-reduce:animate-none motion-reduce:transition-none motion-reduce:hover:scale-100"
+                      >
+                        <span className="text-xs">🎯</span>
+                        <span>Evidence Subgraph</span>
+                      </button>
+                    </div>
+                  </div>
+                )}
+
                 {/* Message Body */}
                 <div className="text-xs sm:text-sm leading-relaxed whitespace-pre-wrap">
                   {msg.content}
@@ -356,20 +466,102 @@ export default function KnowledgeGraphQA({
               <Bot className="w-4 h-4" />
             </div>
 
-            <div className="max-w-[85%] sm:max-w-[75%] bg-white border border-slate-200/90 rounded-2xl p-4 rounded-bl-xs shadow-xs space-y-3 w-full">
-              <div className="flex items-center gap-2 text-xs font-semibold text-indigo-700 animate-pulse">
-                <Sparkles className="w-3.5 h-3.5 text-indigo-600 animate-spin" />
+            <div className="max-w-[85%] sm:max-w-[75%] bg-white border border-slate-200/90 rounded-2xl p-4 rounded-bl-xs shadow-xs space-y-3.5 w-full">
+              <div className="flex items-center gap-2 text-xs font-semibold text-indigo-700 animate-pulse motion-reduce:animate-none">
+                <Sparkles className="w-3.5 h-3.5 text-indigo-600 animate-spin motion-reduce:animate-none" />
                 <span>Traversing Oxigraph Subgraph &amp; Grounding Answer...</span>
               </div>
 
-              <div className="space-y-2 animate-pulse">
+              {/* Multi-step Traversal Progress Pipeline (SMAR-22) */}
+              <div
+                role="status"
+                aria-label="Oxigraph GraphRAG traversal pipeline in progress"
+                className="p-3 bg-indigo-50/70 border border-indigo-100 rounded-xl space-y-2.5"
+              >
+                <div className="flex items-center justify-between text-[11px] font-semibold text-indigo-900 border-b border-indigo-100/80 pb-1.5">
+                  <span className="flex items-center gap-1.5">
+                    <span className="relative flex h-2 w-2">
+                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-indigo-400 opacity-75 motion-reduce:animate-none" />
+                      <span className="relative inline-flex rounded-full h-2 w-2 bg-indigo-600" />
+                    </span>
+                    Live Graph Traversal Pipeline
+                  </span>
+                  <span className="text-[10px] text-indigo-600 font-mono">
+                    Step {loadingStep} of 3
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                  {/* Step 1: Entity Grounding */}
+                  <div
+                    className={`p-2 rounded-lg border text-xs transition-all duration-300 motion-reduce:transition-none motion-reduce:animate-none ${
+                      loadingStep === 1
+                        ? 'bg-white border-indigo-300 shadow-xs ring-1 ring-indigo-400/30'
+                        : 'bg-indigo-50/40 border-indigo-100/60 opacity-70'
+                    }`}
+                  >
+                    <div className="flex items-center gap-1.5 font-bold text-indigo-900">
+                      <span className="text-xs">🌱</span>
+                      <span className="truncate">Entity Grounding</span>
+                      {loadingStep === 1 && (
+                        <span className="ml-auto w-1.5 h-1.5 rounded-full bg-indigo-600 animate-pulse motion-reduce:animate-none" />
+                      )}
+                    </div>
+                    <p className="text-[10px] text-slate-500 mt-0.5 truncate">
+                      Matching concept anchors
+                    </p>
+                  </div>
+
+                  {/* Step 2: Graph Traversal */}
+                  <div
+                    className={`p-2 rounded-lg border text-xs transition-all duration-300 motion-reduce:transition-none motion-reduce:animate-none ${
+                      loadingStep === 2
+                        ? 'bg-white border-indigo-300 shadow-xs ring-1 ring-indigo-400/30'
+                        : 'bg-indigo-50/40 border-indigo-100/60 opacity-70'
+                    }`}
+                  >
+                    <div className="flex items-center gap-1.5 font-bold text-indigo-900">
+                      <span className="text-xs">🔗</span>
+                      <span className="truncate">Graph Traversal</span>
+                      {loadingStep === 2 && (
+                        <span className="ml-auto w-1.5 h-1.5 rounded-full bg-indigo-600 animate-pulse motion-reduce:animate-none" />
+                      )}
+                    </div>
+                    <p className="text-[10px] text-slate-500 mt-0.5 truncate">
+                      1-Hop &amp; 2-Hop SPARQL expansion
+                    </p>
+                  </div>
+
+                  {/* Step 3: Answer Synthesis */}
+                  <div
+                    className={`p-2 rounded-lg border text-xs transition-all duration-300 motion-reduce:transition-none motion-reduce:animate-none ${
+                      loadingStep === 3
+                        ? 'bg-white border-indigo-300 shadow-xs ring-1 ring-indigo-400/30'
+                        : 'bg-indigo-50/40 border-indigo-100/60 opacity-70'
+                    }`}
+                  >
+                    <div className="flex items-center gap-1.5 font-bold text-indigo-900">
+                      <span className="text-xs">🎯</span>
+                      <span className="truncate">Answer Synthesis</span>
+                      {loadingStep === 3 && (
+                        <span className="ml-auto w-1.5 h-1.5 rounded-full bg-indigo-600 animate-pulse motion-reduce:animate-none" />
+                      )}
+                    </div>
+                    <p className="text-[10px] text-slate-500 mt-0.5 truncate">
+                      Semantica context generation
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              <div className="space-y-2 animate-pulse motion-reduce:animate-none">
                 <div className="h-3 bg-slate-200 rounded-md w-full" />
                 <div className="h-3 bg-slate-200 rounded-md w-5/6" />
                 <div className="h-3 bg-slate-200 rounded-md w-3/4" />
               </div>
 
               <div className="pt-2 border-t border-slate-100 flex items-center gap-2">
-                <div className="h-5 bg-indigo-100 rounded-md w-48 animate-pulse" />
+                <div className="h-5 bg-indigo-100 rounded-md w-48 animate-pulse motion-reduce:animate-none" />
               </div>
             </div>
           </div>
