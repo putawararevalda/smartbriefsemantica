@@ -17,7 +17,8 @@ import {
   Layers,
   FileCode2,
   Sparkles,
-  Info
+  Info,
+  Network
 } from 'lucide-react';
 import { GraphContext, RAGProvenance } from '@/types';
 
@@ -27,6 +28,11 @@ export interface SubgraphEvidenceDrawerProps {
   graphContext?: GraphContext;
   provenance?: RAGProvenance;
   query?: string;
+  onReplayOnCanvas?: (lineage: {
+    query?: string;
+    graphContext?: GraphContext;
+    provenance?: RAGProvenance;
+  }) => void;
 }
 
 export function isInfrastructureTriple(triple: {
@@ -57,6 +63,7 @@ export default function SubgraphEvidenceDrawer({
   graphContext,
   provenance,
   query,
+  onReplayOnCanvas,
 }: SubgraphEvidenceDrawerProps) {
   const [tripleSearch, setTripleSearch] = useState<string>('');
   const [copiedChecksum, setCopiedChecksum] = useState<boolean>(false);
@@ -205,14 +212,31 @@ export default function SubgraphEvidenceDrawer({
               )}
             </div>
 
-            <button
-              type="button"
-              onClick={onClose}
-              className="p-2 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-200/70 transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500/20 shrink-0"
-              aria-label="Close evidence drawer"
-            >
-              <X className="w-5 h-5" />
-            </button>
+            <div className="flex items-center gap-2 shrink-0">
+              {onReplayOnCanvas && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    onReplayOnCanvas({ query, graphContext, provenance });
+                    onClose();
+                  }}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-indigo-600 text-white hover:bg-indigo-700 transition-all shadow-xs cursor-pointer hover:scale-105 active:scale-95 motion-reduce:hover:scale-100"
+                  title="Replay this traversal on the Knowledge Graph canvas"
+                  aria-label="Replay Traversal on Knowledge Graph Canvas"
+                >
+                  <Network className="w-3.5 h-3.5" />
+                  <span>Replay on Canvas</span>
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={onClose}
+                className="p-2 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-200/70 transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500/20 shrink-0"
+                aria-label="Close evidence drawer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
           </div>
 
           {/* Quick Metrics Bar */}

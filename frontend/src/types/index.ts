@@ -163,3 +163,11 @@ export interface RAGChatMessage {
   provenance?: RAGProvenance;
   isStreaming?: boolean;
 }
+
+// SMAR-23: Knowledge Graph Traversal Lineage for Canvas Playback
+export interface TraversalLineage {
+  query?: string;
+  graphContext?: GraphContext;
+  provenance?: RAGProvenance;
+  timestamp?: string;
+}

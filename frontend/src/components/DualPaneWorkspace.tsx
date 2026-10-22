@@ -55,6 +55,30 @@ export default function DualPaneWorkspace({
   const [copiedSummary, setCopiedSummary] = useState<boolean>(false);
   const [highlightedConcept, setHighlightedConcept] = useState<string | null>(null);
 
+  // Traversal Lineage for Canvas Playback Synchronization (SMAR-23)
+  const [activeTraversalLineage, setActiveTraversalLineage] = useState<{
+    query?: string;
+    graphContext?: any;
+    provenance?: any;
+  } | null>(null);
+
+  const handleInspectTraversalOnCanvas = (lineage: {
+    query?: string;
+    graphContext?: any;
+    provenance?: any;
+  }) => {
+    setActiveTraversalLineage(lineage);
+    setActiveTab('graph');
+  };
+
+  const handleDispatchTraversal = (lineage: {
+    query?: string;
+    graphContext?: any;
+    provenance?: any;
+  }) => {
+    setActiveTraversalLineage(lineage);
+  };
+
   // Hydrate Study Deck Mode preference from localStorage
   useEffect(() => {
     try {
@@ -523,6 +547,12 @@ export default function DualPaneWorkspace({
               >
                 <Share2 className="w-3.5 h-3.5 pointer-events-none shrink-0" />
                 <span className="pointer-events-none select-none">Graph</span>
+                {activeTraversalLineage && (
+                  <span
+                    className="w-2 h-2 rounded-full bg-amber-400 animate-pulse motion-reduce:animate-none shrink-0"
+                    title="GraphRAG Traversal Playback Active"
+                  />
+                )}
                 <span
                   role="button"
                   tabIndex={0}
@@ -945,6 +975,8 @@ export default function DualPaneWorkspace({
                 graph={result.graph}
                 concepts={concepts}
                 initialTriplets={result.graph?.triplets}
+                activeTraversalLineage={activeTraversalLineage}
+                onClearTraversalLineage={() => setActiveTraversalLineage(null)}
               />
             </div>
           )}
@@ -967,6 +999,8 @@ export default function DualPaneWorkspace({
                 concepts={concepts}
                 documentTitle={documentTitle}
                 tripletCount={tripletCount}
+                onInspectTraversalOnCanvas={handleInspectTraversalOnCanvas}
+                onDispatchTraversal={handleDispatchTraversal}
               />
             </div>
           )}

@@ -17,6 +17,7 @@ import {
   ExternalLink,
   ChevronRight,
   CheckCircle2,
+  Network,
   X
 } from 'lucide-react';
 import { GraphConcept, RAGChatMessage, RAGQueryResponse, GraphContext, RAGProvenance } from '@/types';
@@ -27,6 +28,16 @@ export interface KnowledgeGraphQAProps {
   concepts: GraphConcept[];
   documentTitle?: string;
   tripletCount?: number;
+  onInspectTraversalOnCanvas?: (lineage: {
+    query?: string;
+    graphContext?: GraphContext;
+    provenance?: RAGProvenance;
+  }) => void;
+  onDispatchTraversal?: (lineage: {
+    query?: string;
+    graphContext?: GraphContext;
+    provenance?: RAGProvenance;
+  }) => void;
 }
 
 export default function KnowledgeGraphQA({
@@ -34,6 +45,8 @@ export default function KnowledgeGraphQA({
   concepts,
   documentTitle = 'Current Document',
   tripletCount = 0,
+  onInspectTraversalOnCanvas,
+  onDispatchTraversal,
 }: KnowledgeGraphQAProps) {
   const [messages, setMessages] = useState<RAGChatMessage[]>([]);
   const [inputQuery, setInputQuery] = useState<string>('');
@@ -51,6 +64,17 @@ export default function KnowledgeGraphQA({
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+
+  // Dispatch traversal to Knowledge Graph Canvas (SMAR-23)
+  const handleInspectOnCanvas = (msg: RAGChatMessage) => {
+    if (msg.graph_context && onInspectTraversalOnCanvas) {
+      onInspectTraversalOnCanvas({
+        query: msg.content,
+        graphContext: msg.graph_context,
+        provenance: msg.provenance,
+      });
+    }
+  };
 
   // Cycle loading traversal pipeline stages (SMAR-22)
   useEffect(() => {
@@ -163,6 +187,15 @@ export default function KnowledgeGraphQA({
 
       setMessages((prev) => [...prev, assistantMsg]);
       setIsLoading(false);
+
+      // Dispatch traversal lineage to Knowledge Graph panel (SMAR-23)
+      if (data.graph_context && onDispatchTraversal) {
+        onDispatchTraversal({
+          query: q,
+          graphContext: data.graph_context,
+          provenance: data.provenance,
+        });
+      }
 
       // Typing animation completion effect
       setTimeout(() => {
@@ -343,9 +376,23 @@ export default function KnowledgeGraphQA({
                         <Sparkles className="w-3 h-3 text-indigo-600" />
                         Traversal Hop Stepper
                       </span>
-                      <span className="text-[10px] font-normal text-indigo-500 lowercase">
-                        click to inspect evidence
-                      </span>
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-[10px] font-normal text-indigo-500 lowercase hidden sm:inline">
+                          click to inspect evidence
+                        </span>
+                        {onInspectTraversalOnCanvas && (
+                          <button
+                            type="button"
+                            onClick={() => handleInspectOnCanvas(msg)}
+                            className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-indigo-600 text-white hover:bg-indigo-700 text-[10px] font-semibold transition-all shadow-2xs hover:scale-105 active:scale-95 cursor-pointer motion-reduce:hover:scale-100"
+                            title="Replay traversal animation on Knowledge Graph canvas"
+                            aria-label="Replay Traversal on Knowledge Graph Canvas"
+                          >
+                            <Network className="w-2.5 h-2.5 text-white" />
+                            <span>Replay on Canvas</span>
+                          </button>
+                        )}
+                      </div>
                     </div>
 
                     <div className="flex items-center flex-wrap gap-1 sm:gap-1.5">
@@ -628,6 +675,7 @@ export default function KnowledgeGraphQA({
         graphContext={activeEvidence?.graphContext}
         provenance={activeEvidence?.provenance}
         query={activeEvidence?.query}
+        onReplayOnCanvas={onInspectTraversalOnCanvas}
       />
     </div>
   );

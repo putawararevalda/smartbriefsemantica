@@ -17,18 +17,25 @@ import {
   Share2,
   Info,
   Play,
+  Pause,
+  RotateCcw,
+  SkipBack,
+  SkipForward,
+  ChevronLeft,
+  ChevronRight,
   ArrowRight,
   Sparkles,
   Layers,
-  ChevronRight,
   ShieldCheck,
 } from 'lucide-react';
-import { KnowledgeGraph, GraphNode, GraphEdge, TripletItem, GraphConcept } from '@/types';
+import { KnowledgeGraph, GraphNode, GraphEdge, TripletItem, GraphConcept, TraversalLineage } from '@/types';
 
 export interface KnowledgeGraphExplorerProps {
   graph?: KnowledgeGraph;
   concepts?: GraphConcept[];
   initialTriplets?: TripletItem[];
+  activeTraversalLineage?: TraversalLineage | null;
+  onClearTraversalLineage?: () => void;
 }
 
 type ExplorerSubTab = 'visual' | 'triplets' | 'sparql' | 'export';
@@ -74,12 +81,146 @@ export default function KnowledgeGraphExplorer({
   graph,
   concepts = [],
   initialTriplets = [],
+  activeTraversalLineage = null,
+  onClearTraversalLineage,
 }: KnowledgeGraphExplorerProps) {
   const [activeSubTab, setActiveSubTab] = useState<ExplorerSubTab>('visual');
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [visualSearch, setVisualSearch] = useState<string>('');
   const [typeFilter, setTypeFilter] = useState<string>('all');
   const [zoomLevel, setZoomLevel] = useState<number>(1);
+
+  // Traversal Playback & Rewind State (SMAR-23)
+  const [isTraversalDemo, setIsTraversalDemo] = useState<boolean>(false);
+  const isTraversalMode = Boolean(activeTraversalLineage || isTraversalDemo);
+  const [currentHop, setCurrentHop] = useState<number>(0);
+  const [isPlaying, setIsPlaying] = useState<boolean>(false);
+  const maxHops = 2;
+
+  // Hop definitions
+  const HOP_DEFINITIONS = useMemo(
+    () => [
+      {
+        hop: 0,
+        title: 'Concept Grounding',
+        desc: 'Matched concept node(s) anchor query intent',
+        tag: 'Anchor',
+      },
+      {
+        hop: 1,
+        title: '1-Hop SPARQL',
+        desc: 'Direct neighbor entities and connecting predicates expanded',
+        tag: '1-Hop',
+      },
+      {
+        hop: 2,
+        title: 'Evidence Subgraph',
+        desc: 'Multi-hop expansion and verified provenance triples',
+        tag: 'Evidence Subgraph',
+      },
+    ],
+    []
+  );
+
+  const currentHopDef = HOP_DEFINITIONS[currentHop] || HOP_DEFINITIONS[0];
+
+  // Auto-activate & reset when a new activeTraversalLineage is dispatched
+  useEffect(() => {
+    if (activeTraversalLineage) {
+      setCurrentHop(0);
+      setIsPlaying(true);
+      setActiveSubTab('visual');
+    }
+  }, [activeTraversalLineage]);
+
+  // Automated sequential playback with ~800ms cadence between hops (SMAR-23)
+  useEffect(() => {
+    let interval: NodeJS.Timeout | undefined;
+    if (isPlaying && isTraversalMode) {
+      interval = setInterval(() => {
+        setCurrentHop((prev) => {
+          if (prev >= maxHops) {
+            setIsPlaying(false);
+            return prev;
+          }
+          return prev + 1;
+        });
+      }, 800);
+    }
+    return () => {
+      if (interval) clearInterval(interval);
+    };
+  }, [isPlaying, isTraversalMode, maxHops]);
+
+  // Traversal Playback Toolbar Handlers
+  const handleRewindToStart = () => {
+    setIsPlaying(false);
+    setCurrentHop(0);
+  };
+
+  const handleStepBack = () => {
+    setIsPlaying(false);
+    setCurrentHop((prev) => Math.max(0, prev - 1));
+  };
+
+  const handleTogglePlay = () => {
+    if (currentHop >= maxHops) {
+      setCurrentHop(0);
+      setIsPlaying(true);
+    } else {
+      setIsPlaying((prev) => !prev);
+    }
+  };
+
+  const handleStepForward = () => {
+    setIsPlaying(false);
+    setCurrentHop((prev) => Math.min(maxHops, prev + 1));
+  };
+
+  const handleFastForward = () => {
+    setIsPlaying(false);
+    setCurrentHop(maxHops);
+  };
+
+  // Keyboard navigation on toolbar
+  const handleToolbarKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'ArrowLeft') {
+      e.preventDefault();
+      handleStepBack();
+    } else if (e.key === 'ArrowRight') {
+      e.preventDefault();
+      handleStepForward();
+    } else if (e.key === ' ' || e.code === 'Space') {
+      e.preventDefault();
+      handleTogglePlay();
+    }
+  };
+
+  // Global window keyboard listener for traversal mode
+  useEffect(() => {
+    if (!isTraversalMode || activeSubTab !== 'visual') return;
+
+    const handleWindowKeyDown = (e: KeyboardEvent) => {
+      const activeTag = (document.activeElement?.tagName || '').toLowerCase();
+      if (activeTag === 'input' || activeTag === 'textarea' || activeTag === 'select') {
+        return;
+      }
+      if (e.key === 'ArrowLeft') {
+        e.preventDefault();
+        handleStepBack();
+      } else if (e.key === 'ArrowRight') {
+        e.preventDefault();
+        handleStepForward();
+      } else if (e.key === ' ' || e.code === 'Space') {
+        e.preventDefault();
+        handleTogglePlay();
+      }
+    };
+
+    window.addEventListener('keydown', handleWindowKeyDown);
+    return () => window.removeEventListener('keydown', handleWindowKeyDown);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isTraversalMode, activeSubTab, currentHop, isPlaying]);
 
   // Triplets store state
   const [triplets, setTriplets] = useState<TripletItem[]>(() => {
@@ -111,40 +252,202 @@ export default function KnowledgeGraphExplorer({
   const [isLoadingTurtle, setIsLoadingTurtle] = useState<boolean>(false);
   const [isCopied, setIsCopied] = useState<boolean>(false);
 
-  // Normalize nodes and edges
+  // Normalize nodes and edges, merging with activeTraversalLineage if present
   const nodes: GraphNode[] = useMemo(() => {
-    if (graph?.nodes && graph.nodes.length > 0) return graph.nodes;
-    if (concepts && concepts.length > 0) {
-      return concepts.map((c) => ({
+    let baseNodes: GraphNode[] = [];
+    if (graph?.nodes && graph.nodes.length > 0) {
+      baseNodes = [...graph.nodes];
+    } else if (concepts && concepts.length > 0) {
+      baseNodes = concepts.map((c) => ({
         id: c.id,
         label: c.label || c.name || c.id,
         type: c.type || 'Concept',
         description: c.description || '',
       }));
     }
-    return [];
-  }, [graph?.nodes, concepts]);
+
+    if (activeTraversalLineage?.graphContext) {
+      const existingIds = new Set(baseNodes.map((n) => n.id.toLowerCase()));
+      // 1. Matched concept anchors
+      (activeTraversalLineage.graphContext.matched_concepts || []).forEach((mc) => {
+        const id = mc.id || mc.name;
+        if (!existingIds.has(id.toLowerCase())) {
+          existingIds.add(id.toLowerCase());
+          baseNodes.push({
+            id,
+            label: mc.name || mc.id,
+            type: mc.category || 'Concept',
+            description: 'Concept anchor matched for GraphRAG query',
+          });
+        }
+      });
+      // 2. Retrieved evidence triples entities
+      const triples = (activeTraversalLineage.graphContext.retrieved_triples || []).filter(
+        (t) => !isInfrastructureTriple(t)
+      );
+      triples.forEach((t) => {
+        if (!existingIds.has(t.subject.toLowerCase())) {
+          existingIds.add(t.subject.toLowerCase());
+          baseNodes.push({
+            id: t.subject,
+            label: t.subject,
+            type: 'Entity',
+            description: 'Asserted entity from retrieved evidence subgraph',
+          });
+        }
+        if (!existingIds.has(t.object.toLowerCase())) {
+          existingIds.add(t.object.toLowerCase());
+          baseNodes.push({
+            id: t.object,
+            label: t.object,
+            type: 'Entity',
+            description: 'Asserted entity from retrieved evidence subgraph',
+          });
+        }
+      });
+    }
+
+    return baseNodes;
+  }, [graph?.nodes, concepts, activeTraversalLineage]);
 
   const edges: GraphEdge[] = useMemo(() => {
-    if (graph?.edges && graph.edges.length > 0) return graph.edges;
-    // Derive from concepts relations if not in graph
-    const derived: GraphEdge[] = [];
-    concepts.forEach((c) => {
-      if (Array.isArray(c.relations)) {
-        c.relations.forEach((relStr) => {
-          const parts = relStr.split(':');
-          const relName = parts[0] || 'relates_to';
-          const targetId = parts.slice(1).join(':') || relStr;
-          derived.push({
-            source: c.id,
-            target: targetId,
-            relation: relName,
+    let baseEdges: GraphEdge[] = [];
+    if (graph?.edges && graph.edges.length > 0) {
+      baseEdges = [...graph.edges];
+    } else {
+      concepts.forEach((c) => {
+        if (Array.isArray(c.relations)) {
+          c.relations.forEach((relStr) => {
+            const parts = relStr.split(':');
+            const relName = parts[0] || 'relates_to';
+            const targetId = parts.slice(1).join(':') || relStr;
+            baseEdges.push({
+              source: c.id,
+              target: targetId,
+              relation: relName,
+            });
           });
+        }
+      });
+    }
+
+    if (activeTraversalLineage?.graphContext) {
+      const edgeKey = (s: string, r: string, t: string) =>
+        `${s.toLowerCase()}__${r.toLowerCase()}__${t.toLowerCase()}`;
+      const existingKeys = new Set(
+        baseEdges.map((e) => edgeKey(e.source, e.relation, e.target))
+      );
+
+      const triples = (activeTraversalLineage.graphContext.retrieved_triples || []).filter(
+        (t) => !isInfrastructureTriple(t)
+      );
+      triples.forEach((t) => {
+        const k = edgeKey(t.subject, t.predicate, t.object);
+        if (!existingKeys.has(k)) {
+          existingKeys.add(k);
+          baseEdges.push({
+            source: t.subject,
+            target: t.object,
+            relation: t.predicate,
+          });
+        }
+      });
+    }
+
+    return baseEdges;
+  }, [graph?.edges, concepts, activeTraversalLineage]);
+
+  // Compute hop levels for nodes and edges (SMAR-23 State Rewind Mechanics)
+  const { nodeHopLevels, edgeHopLevels } = useMemo(() => {
+    const nodeHops: Record<string, number> = {};
+    const edgeHops: Record<number, number> = {};
+
+    if (!isTraversalMode || nodes.length === 0) {
+      return { nodeHopLevels: nodeHops, edgeHopLevels: edgeHops };
+    }
+
+    // Step 0: Identify Hop 0 (Anchor concepts)
+    const anchorIds = new Set<string>();
+    const matched = activeTraversalLineage?.graphContext?.matched_concepts || [];
+
+    if (matched.length > 0) {
+      matched.forEach((mc) => {
+        const mcId = (mc.id || '').toLowerCase();
+        const mcName = (mc.name || '').toLowerCase();
+        nodes.forEach((n) => {
+          const nId = n.id.toLowerCase();
+          const nLabel = n.label.toLowerCase();
+          if (
+            (mcId && (nId === mcId || nLabel === mcId)) ||
+            (mcName && (nId === mcName || nLabel === mcName || nLabel.includes(mcName) || mcName.includes(nLabel)))
+          ) {
+            anchorIds.add(n.id);
+          }
         });
+        if (mc.id) anchorIds.add(mc.id);
+      });
+    }
+
+    // Fallback if no matched concept matched any node: use first node as anchor
+    if (anchorIds.size === 0 && nodes.length > 0) {
+      anchorIds.add(nodes[0].id);
+    }
+
+    nodes.forEach((n) => {
+      if (anchorIds.has(n.id)) {
+        nodeHops[n.id] = 0;
       }
     });
-    return derived;
-  }, [graph?.edges, concepts]);
+
+    // Step 1: Hop 1 edges & nodes (connected directly to anchor nodes)
+    const hop1NodeIds = new Set<string>();
+    edges.forEach((edge, idx) => {
+      const srcIsAnchor = anchorIds.has(edge.source);
+      const tgtIsAnchor = anchorIds.has(edge.target);
+      if (srcIsAnchor || tgtIsAnchor) {
+        edgeHops[idx] = 1;
+        if (!srcIsAnchor) hop1NodeIds.add(edge.source);
+        if (!tgtIsAnchor) hop1NodeIds.add(edge.target);
+      }
+    });
+
+    hop1NodeIds.forEach((id) => {
+      if (nodeHops[id] === undefined) {
+        nodeHops[id] = 1;
+      }
+    });
+
+    // Step 2: Hop 2 edges & nodes (expanded 1 step further from hop 1 nodes)
+    const hop2NodeIds = new Set<string>();
+    edges.forEach((edge, idx) => {
+      if (edgeHops[idx] === undefined) {
+        const srcIsHop1 = hop1NodeIds.has(edge.source);
+        const tgtIsHop1 = hop1NodeIds.has(edge.target);
+        if (srcIsHop1 || tgtIsHop1) {
+          edgeHops[idx] = 2;
+          if (!srcIsHop1 && !anchorIds.has(edge.source)) hop2NodeIds.add(edge.source);
+          if (!tgtIsHop1 && !anchorIds.has(edge.target)) hop2NodeIds.add(edge.target);
+        } else {
+          edgeHops[idx] = 2;
+        }
+      }
+    });
+
+    hop2NodeIds.forEach((id) => {
+      if (nodeHops[id] === undefined) {
+        nodeHops[id] = 2;
+      }
+    });
+
+    // Default remaining nodes to hop 2
+    nodes.forEach((n) => {
+      if (nodeHops[n.id] === undefined) {
+        nodeHops[n.id] = 2;
+      }
+    });
+
+    return { nodeHopLevels: nodeHops, edgeHopLevels: edgeHops };
+  }, [isTraversalMode, activeTraversalLineage, nodes, edges]);
 
   // Sync triplets on prop update
   useEffect(() => {
@@ -524,35 +827,250 @@ export default function KnowledgeGraphExplorer({
               )}
             </div>
 
-            {/* Zoom Controls */}
-            <div className="flex items-center gap-1 text-slate-600">
+            <div className="flex items-center gap-2">
+              {/* Traversal Playback Mode Toggle (SMAR-23) */}
               <button
                 type="button"
-                onClick={() => setZoomLevel((z) => Math.max(0.7, +(z - 0.15).toFixed(2)))}
-                className="p-1.5 rounded-lg bg-white border border-slate-200 hover:bg-slate-100 shadow-xs"
-                title="Zoom Out"
+                onClick={() => {
+                  setIsTraversalDemo((prev) => !prev);
+                  setCurrentHop(0);
+                  setIsPlaying(false);
+                }}
+                className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all shadow-xs cursor-pointer ${
+                  isTraversalMode
+                    ? 'bg-amber-500 text-slate-950 font-bold border border-amber-400 ring-2 ring-amber-400/30'
+                    : 'bg-white text-indigo-700 hover:bg-indigo-50 border border-slate-200'
+                } motion-reduce:transition-none`}
+                title="Toggle GraphRAG Traversal Playback & Rewind Controls"
+                aria-label="Toggle GraphRAG Traversal Playback"
               >
-                <ZoomOut className="w-3.5 h-3.5" />
+                <Sparkles className="w-3.5 h-3.5 text-indigo-500 group-hover:rotate-12" />
+                <span>{isTraversalMode ? 'Traversal Active' : 'Traversal Playback'}</span>
               </button>
-              <span className="text-[11px] font-mono px-1.5">{Math.round(zoomLevel * 100)}%</span>
-              <button
-                type="button"
-                onClick={() => setZoomLevel((z) => Math.min(1.6, +(z + 0.15).toFixed(2)))}
-                className="p-1.5 rounded-lg bg-white border border-slate-200 hover:bg-slate-100 shadow-xs"
-                title="Zoom In"
-              >
-                <ZoomIn className="w-3.5 h-3.5" />
-              </button>
-              <button
-                type="button"
-                onClick={() => setZoomLevel(1)}
-                className="p-1.5 rounded-lg bg-white border border-slate-200 hover:bg-slate-100 shadow-xs ml-1"
-                title="Reset Zoom"
-              >
-                <Maximize2 className="w-3.5 h-3.5" />
-              </button>
+
+              {/* Zoom Controls */}
+              <div className="flex items-center gap-1 text-slate-600">
+                <button
+                  type="button"
+                  onClick={() => setZoomLevel((z) => Math.max(0.7, +(z - 0.15).toFixed(2)))}
+                  className="p-1.5 rounded-lg bg-white border border-slate-200 hover:bg-slate-100 shadow-xs cursor-pointer"
+                  title="Zoom Out"
+                  aria-label="Zoom Out"
+                >
+                  <ZoomOut className="w-3.5 h-3.5" />
+                </button>
+                <span className="text-[11px] font-mono px-1.5">{Math.round(zoomLevel * 100)}%</span>
+                <button
+                  type="button"
+                  onClick={() => setZoomLevel((z) => Math.min(1.6, +(z + 0.15).toFixed(2)))}
+                  className="p-1.5 rounded-lg bg-white border border-slate-200 hover:bg-slate-100 shadow-xs cursor-pointer"
+                  title="Zoom In"
+                  aria-label="Zoom In"
+                >
+                  <ZoomIn className="w-3.5 h-3.5" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setZoomLevel(1)}
+                  className="p-1.5 rounded-lg bg-white border border-slate-200 hover:bg-slate-100 shadow-xs ml-1 cursor-pointer"
+                  title="Reset Zoom"
+                  aria-label="Reset Zoom"
+                >
+                  <Maximize2 className="w-3.5 h-3.5" />
+                </button>
+              </div>
             </div>
           </div>
+
+          {/* Traversal History Playback & Rewind Scrubber Bar (SMAR-23) */}
+          {isTraversalMode && (
+            <div
+              role="toolbar"
+              aria-label="Knowledge Graph Traversal Playback Controls"
+              tabIndex={0}
+              onKeyDown={handleToolbarKeyDown}
+              className="bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 border border-indigo-700/60 rounded-xl p-3 sm:p-4 text-white space-y-3 shadow-md focus:outline-none focus:ring-2 focus:ring-indigo-400 select-none animate-in fade-in duration-300 motion-reduce:animate-none"
+            >
+              {/* Header / Query Lineage Summary */}
+              <div className="flex flex-wrap items-center justify-between gap-2 border-b border-indigo-800/60 pb-2">
+                <div className="flex items-center gap-2">
+                  <span className="flex h-2.5 w-2.5 relative">
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75 motion-reduce:animate-none" />
+                    <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-amber-500" />
+                  </span>
+                  <span className="text-xs font-bold text-amber-300 tracking-wide uppercase">
+                    GraphRAG Traversal Playback
+                  </span>
+                  {activeTraversalLineage?.query && (
+                    <span className="text-xs text-indigo-200 truncate max-w-xs sm:max-w-md italic">
+                      &ldquo;{activeTraversalLineage.query}&rdquo;
+                    </span>
+                  )}
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <span className="text-[11px] font-mono text-slate-300 hidden sm:inline">
+                    [Space] Play/Pause &bull; [←/→] Step
+                  </span>
+                  {onClearTraversalLineage && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsPlaying(false);
+                        setIsTraversalDemo(false);
+                        onClearTraversalLineage();
+                      }}
+                      className="text-[11px] font-medium text-slate-300 hover:text-white px-2 py-0.5 rounded-md bg-white/10 hover:bg-white/20 border border-white/20 transition-all cursor-pointer motion-reduce:transition-none"
+                    >
+                      Exit Playback
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {/* Controls Row: 5 Toolbar Buttons & Hop Indicator */}
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                {/* 5 Playback Controls Toolbar */}
+                <div className="flex items-center gap-1 sm:gap-1.5" role="group" aria-label="Playback Buttons">
+                  {/* [⏮ Rewind to Start] */}
+                  <button
+                    type="button"
+                    onClick={handleRewindToStart}
+                    disabled={currentHop === 0}
+                    title="Rewind to Start (Hop 0)"
+                    aria-label="Rewind to Start"
+                    className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-white/10 hover:bg-white/20 active:bg-white/30 disabled:opacity-30 disabled:cursor-not-allowed border border-white/20 transition-all cursor-pointer shadow-2xs motion-reduce:transition-none"
+                  >
+                    <span className="font-mono text-sm">⏮</span>
+                    <span className="hidden md:inline">Rewind to Start</span>
+                  </button>
+
+                  {/* [◀ Step Back] */}
+                  <button
+                    type="button"
+                    onClick={handleStepBack}
+                    disabled={currentHop === 0}
+                    title="Step Back"
+                    aria-label="Step Back"
+                    className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-white/10 hover:bg-white/20 active:bg-white/30 disabled:opacity-30 disabled:cursor-not-allowed border border-white/20 transition-all cursor-pointer shadow-2xs motion-reduce:transition-none"
+                  >
+                    <span className="font-mono text-sm">◀</span>
+                    <span className="hidden md:inline">Step Back</span>
+                  </button>
+
+                  {/* [▶ Play / ⏸ Pause] (automated sequential playback with ~800ms cadence between hops) */}
+                  <button
+                    type="button"
+                    onClick={handleTogglePlay}
+                    title={isPlaying ? 'Pause Traversal' : 'Play Traversal'}
+                    aria-label={isPlaying ? 'Pause Traversal' : 'Play Traversal'}
+                    className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer shadow-xs ${
+                      isPlaying
+                        ? 'bg-amber-500 hover:bg-amber-600 text-slate-950 border border-amber-400'
+                        : 'bg-indigo-600 hover:bg-indigo-500 text-white border border-indigo-400'
+                    } motion-reduce:transition-none`}
+                  >
+                    <span className="font-mono text-sm">{isPlaying ? '⏸' : '▶'}</span>
+                    <span>{isPlaying ? 'Pause' : 'Play'}</span>
+                  </button>
+
+                  {/* [Step Forward ▶] */}
+                  <button
+                    type="button"
+                    onClick={handleStepForward}
+                    disabled={currentHop === maxHops}
+                    title="Step Forward"
+                    aria-label="Step Forward"
+                    className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-white/10 hover:bg-white/20 active:bg-white/30 disabled:opacity-30 disabled:cursor-not-allowed border border-white/20 transition-all cursor-pointer shadow-2xs motion-reduce:transition-none"
+                  >
+                    <span className="hidden md:inline">Step Forward</span>
+                    <span className="font-mono text-sm">▶</span>
+                  </button>
+
+                  {/* [⏭ Fast Forward to Full Subgraph] */}
+                  <button
+                    type="button"
+                    onClick={handleFastForward}
+                    disabled={currentHop === maxHops}
+                    title="Fast Forward to Full Subgraph"
+                    aria-label="Fast Forward to Full Subgraph"
+                    className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-white/10 hover:bg-white/20 active:bg-white/30 disabled:opacity-30 disabled:cursor-not-allowed border border-white/20 transition-all cursor-pointer shadow-2xs motion-reduce:transition-none"
+                  >
+                    <span className="hidden md:inline">Fast Forward</span>
+                    <span className="font-mono text-sm">⏭</span>
+                  </button>
+                </div>
+
+                {/* Hop Index Indicator */}
+                <div className="flex items-center gap-2">
+                  <div className="text-right">
+                    <div className="text-xs font-bold text-white tracking-wide">
+                      Hop {currentHop} of {maxHops} ({currentHopDef.title})
+                    </div>
+                    <div className="text-[11px] text-slate-300">
+                      {currentHopDef.desc}
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Scrubber Range & Quick Jump Buttons */}
+              <div className="flex flex-col sm:flex-row items-center gap-3 pt-1">
+                <div className="flex-1 w-full flex items-center gap-3">
+                  <span className="text-[11px] font-mono text-slate-400">Hop 0</span>
+                  <input
+                    type="range"
+                    aria-label="Hop Scrubber"
+                    min={0}
+                    max={maxHops}
+                    step={1}
+                    value={currentHop}
+                    onChange={(e) => {
+                      setIsPlaying(false);
+                      setCurrentHop(Number(e.target.value));
+                    }}
+                    aria-valuemin={0}
+                    aria-valuemax={maxHops}
+                    aria-valuenow={currentHop}
+                    aria-valuetext={`Hop ${currentHop} of ${maxHops} (${currentHopDef.title})`}
+                    className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-indigo-400 focus:outline-none focus:ring-1 focus:ring-indigo-400"
+                  />
+                  <span className="text-[11px] font-mono text-slate-400">Hop {maxHops}</span>
+                </div>
+
+                {/* Quick Step Buttons */}
+                <div className="flex items-center gap-1.5 w-full sm:w-auto justify-end">
+                  {HOP_DEFINITIONS.map((def) => {
+                    const isActive = currentHop === def.hop;
+                    const isPassed = currentHop >= def.hop;
+                    return (
+                      <button
+                        key={def.hop}
+                        type="button"
+                        onClick={() => {
+                          setIsPlaying(false);
+                          setCurrentHop(def.hop);
+                        }}
+                        className={`px-2.5 py-1 rounded-md text-[11px] font-semibold transition-all cursor-pointer border ${
+                          isActive
+                            ? def.hop === 0
+                              ? 'bg-amber-500 text-slate-950 border-amber-300 ring-2 ring-amber-400/50'
+                              : def.hop === 1
+                              ? 'bg-cyan-500 text-slate-950 border-cyan-300 ring-2 ring-cyan-400/50'
+                              : 'bg-purple-500 text-white border-purple-300 ring-2 ring-purple-400/50'
+                            : isPassed
+                            ? 'bg-indigo-900/60 text-indigo-200 border-indigo-700/60 hover:bg-indigo-800/80'
+                            : 'bg-slate-800/60 text-slate-400 border-slate-700/60 hover:bg-slate-800'
+                        } motion-reduce:transition-none`}
+                      >
+                        {def.tag}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* SVG Visual Graph Container */}
           <div className="relative w-full h-[480px] bg-slate-900 rounded-2xl overflow-hidden border border-slate-800 shadow-inner flex items-center justify-center select-none">
@@ -569,7 +1087,7 @@ export default function KnowledgeGraphExplorer({
                 style={{ transform: `scale(${zoomLevel})` }}
               >
                 <defs>
-                  {/* Arrow marker for directed edges */}
+                  {/* Arrow marker for default directed edges */}
                   <marker
                     id="arrowhead"
                     markerWidth="8"
@@ -590,6 +1108,57 @@ export default function KnowledgeGraphExplorer({
                   >
                     <polygon points="0 0, 8 3, 0 6" fill="#38bdf8" />
                   </marker>
+                  <marker
+                    id="arrowhead-anchor"
+                    markerWidth="8"
+                    markerHeight="6"
+                    refX="22"
+                    refY="3"
+                    orient="auto"
+                  >
+                    <polygon points="0 0, 8 3, 0 6" fill="#f59e0b" />
+                  </marker>
+                  <marker
+                    id="arrowhead-1hop"
+                    markerWidth="8"
+                    markerHeight="6"
+                    refX="22"
+                    refY="3"
+                    orient="auto"
+                  >
+                    <polygon points="0 0, 8 3, 0 6" fill="#06b6d4" />
+                  </marker>
+                  <marker
+                    id="arrowhead-2hop"
+                    markerWidth="8"
+                    markerHeight="6"
+                    refX="22"
+                    refY="3"
+                    orient="auto"
+                  >
+                    <polygon points="0 0, 8 3, 0 6" fill="#a855f7" />
+                  </marker>
+                  <marker
+                    id="arrowhead-dimmed"
+                    markerWidth="8"
+                    markerHeight="6"
+                    refX="22"
+                    refY="3"
+                    orient="auto"
+                  >
+                    <polygon points="0 0, 8 3, 0 6" fill="#334155" />
+                  </marker>
+
+                  {/* SVG Drop Shadow Filters for accessible non-seizure glow effects (SMAR-23) */}
+                  <filter id="glow-anchor" x="-50%" y="-50%" width="200%" height="200%">
+                    <feDropShadow dx="0" dy="0" stdDeviation="6" floodColor="#f59e0b" floodOpacity="0.85" />
+                  </filter>
+                  <filter id="glow-1hop" x="-50%" y="-50%" width="200%" height="200%">
+                    <feDropShadow dx="0" dy="0" stdDeviation="6" floodColor="#06b6d4" floodOpacity="0.85" />
+                  </filter>
+                  <filter id="glow-2hop" x="-50%" y="-50%" width="200%" height="200%">
+                    <feDropShadow dx="0" dy="0" stdDeviation="6" floodColor="#a855f7" floodOpacity="0.85" />
+                  </filter>
                 </defs>
 
                 {/* Grid Background Pattern */}
@@ -609,13 +1178,83 @@ export default function KnowledgeGraphExplorer({
                     const tgtPos = nodePositions[edge.target];
                     if (!srcPos || !tgtPos) return null;
 
+                    const midX = (srcPos.x + tgtPos.x) / 2;
+                    const midY = (srcPos.y + tgtPos.y) / 2;
+
+                    // Traversal state rewind rendering
+                    if (isTraversalMode) {
+                      const edgeHop = edgeHopLevels[idx] ?? -1;
+                      const isDiscovered = edgeHop !== -1 && edgeHop <= currentHop;
+                      const isActiveHop = edgeHop === currentHop;
+                      const isUnvisited = !isDiscovered;
+
+                      const strokeColor =
+                        isActiveHop && edgeHop === 1
+                          ? '#06b6d4'
+                          : isActiveHop && edgeHop === 2
+                          ? '#a855f7'
+                          : isDiscovered
+                          ? '#38bdf8'
+                          : '#334155';
+
+                      const marker =
+                        isActiveHop && edgeHop === 1
+                          ? 'url(#arrowhead-1hop)'
+                          : isActiveHop && edgeHop === 2
+                          ? 'url(#arrowhead-2hop)'
+                          : isDiscovered
+                          ? 'url(#arrowhead-highlight)'
+                          : 'url(#arrowhead-dimmed)';
+
+                      return (
+                        <g
+                          key={`edge-${idx}`}
+                          opacity={isUnvisited ? 0.1 : 1}
+                          className="transition-opacity duration-300 motion-reduce:transition-none"
+                        >
+                          <line
+                            x1={srcPos.x}
+                            y1={srcPos.y}
+                            x2={tgtPos.x}
+                            y2={tgtPos.y}
+                            stroke={strokeColor}
+                            strokeWidth={isActiveHop ? 3.5 : isDiscovered ? 2 : 1}
+                            strokeDasharray={isActiveHop ? '6 3' : isDiscovered ? 'none' : '4 3'}
+                            className={isActiveHop ? 'animate-pulse motion-reduce:animate-none' : ''}
+                            markerEnd={marker}
+                          />
+                          {/* Edge Label Badge */}
+                          <g transform={`translate(${midX}, ${midY})`}>
+                            <rect
+                              x="-32"
+                              y="-9"
+                              width="64"
+                              height="18"
+                              rx="5"
+                              fill="#0f172a"
+                              stroke={strokeColor}
+                              strokeWidth="1"
+                            />
+                            <text
+                              textAnchor="middle"
+                              y="3"
+                              fontSize="9"
+                              fontFamily="monospace"
+                              fill={isActiveHop ? '#ffffff' : isDiscovered ? '#7dd3fc' : '#64748b'}
+                              fontWeight={isActiveHop ? 'bold' : 'normal'}
+                            >
+                              {edge.relation.length > 10 ? `${edge.relation.slice(0, 9)}…` : edge.relation}
+                            </text>
+                          </g>
+                        </g>
+                      );
+                    }
+
+                    // Default non-traversal edge rendering
                     const isConnectedToSelected =
                       selectedNodeId &&
                       (edge.source === selectedNodeId || edge.target === selectedNodeId);
                     const isDimmed = selectedNodeId && !isConnectedToSelected;
-
-                    const midX = (srcPos.x + tgtPos.x) / 2;
-                    const midY = (srcPos.y + tgtPos.y) / 2;
 
                     return (
                       <g key={`edge-${idx}`} opacity={isDimmed ? 0.15 : 1} className="transition-opacity duration-300">
@@ -663,11 +1302,176 @@ export default function KnowledgeGraphExplorer({
                     if (!pos) return null;
 
                     const isSelected = selectedNodeId === node.id;
+                    const color = getNodeColor(node.type);
+
+                    // Traversal state rewind rendering (SMAR-23)
+                    if (isTraversalMode) {
+                      const nodeHop = nodeHopLevels[node.id] ?? -1;
+                      const isDiscovered = nodeHop !== -1 && nodeHop <= currentHop;
+                      const isActiveHop = nodeHop === currentHop;
+                      const isUnvisited = !isDiscovered;
+
+                      // Visual pulse & glow by hop level:
+                      // Concept Grounding (Anchor) -> Amber/Gold pulse
+                      // 1-Hop Traversal -> Indigo/Cyan glow/pulse
+                      // 2-Hop Traversal -> Purple/Emerald glow/pulse
+                      const glowFilter =
+                        isActiveHop && nodeHop === 0
+                          ? 'url(#glow-anchor)'
+                          : isActiveHop && nodeHop === 1
+                          ? 'url(#glow-1hop)'
+                          : isActiveHop && nodeHop === 2
+                          ? 'url(#glow-2hop)'
+                          : undefined;
+
+                      const strokeColor =
+                        isActiveHop && nodeHop === 0
+                          ? '#f59e0b'
+                          : isActiveHop && nodeHop === 1
+                          ? '#06b6d4'
+                          : isActiveHop && nodeHop === 2
+                          ? '#a855f7'
+                          : isDiscovered
+                          ? '#38bdf8'
+                          : '#1e293b';
+
+                      const fillColor =
+                        isActiveHop && nodeHop === 0
+                          ? '#b45309'
+                          : isActiveHop && nodeHop === 1
+                          ? '#0e7490'
+                          : isActiveHop && nodeHop === 2
+                          ? '#6d28d9'
+                          : isDiscovered
+                          ? color.fill
+                          : '#1e293b';
+
+                      return (
+                        <g
+                          key={`node-${node.id}`}
+                          transform={`translate(${pos.x}, ${pos.y})`}
+                          onClick={() => setSelectedNodeId(isSelected ? null : node.id)}
+                          className="cursor-pointer transition-all duration-300 motion-reduce:transition-none"
+                          opacity={isUnvisited ? 0.12 : 1}
+                        >
+                          {/* Active Hop Flash / Pulse Halo Ring */}
+                          {isActiveHop && (
+                            <circle
+                              r={nodeHop === 0 ? 38 : 34}
+                              fill="none"
+                              stroke={strokeColor}
+                              strokeWidth={nodeHop === 0 ? 3.5 : 2.5}
+                              strokeDasharray={nodeHop === 0 ? '6 3' : '4 2'}
+                              className="animate-pulse motion-reduce:animate-none"
+                              filter={glowFilter}
+                            />
+                          )}
+
+                          {/* Discovered Solid Ring */}
+                          {isDiscovered && !isActiveHop && (
+                            <circle
+                              r="30"
+                              fill="none"
+                              stroke="#38bdf8"
+                              strokeWidth="2"
+                              opacity="0.8"
+                            />
+                          )}
+
+                          {/* Node Body Circle */}
+                          <circle
+                            r="26"
+                            fill={fillColor}
+                            stroke={strokeColor}
+                            strokeWidth={isActiveHop ? 3.5 : isDiscovered ? 2.5 : 1.5}
+                            className="hover:scale-110 transition-transform duration-200 motion-reduce:transition-none motion-reduce:hover:scale-100"
+                          />
+
+                          {/* Node Label Initial */}
+                          <text
+                            textAnchor="middle"
+                            y="4"
+                            fill="#ffffff"
+                            fontSize="11"
+                            fontWeight="bold"
+                            fontFamily="sans-serif"
+                            className="pointer-events-none select-none"
+                          >
+                            {(node.label || 'N').slice(0, 3).toUpperCase()}
+                          </text>
+
+                          {/* Node Bottom Label */}
+                          <g transform="translate(0, 38)">
+                            <rect
+                              x="-60"
+                              y="-10"
+                              width="120"
+                              height="20"
+                              rx="6"
+                              fill="#0f172a"
+                              stroke={strokeColor}
+                              strokeWidth={isActiveHop ? 1.5 : 1}
+                              opacity="0.95"
+                            />
+                            <text
+                              textAnchor="middle"
+                              y="3"
+                              fill={isActiveHop ? '#ffffff' : isDiscovered ? '#e2e8f0' : '#64748b'}
+                              fontSize="10"
+                              fontWeight={isActiveHop ? 'bold' : 'normal'}
+                              fontFamily="sans-serif"
+                              className="pointer-events-none select-none"
+                            >
+                              {(node.label || node.id).length > 15
+                                ? `${(node.label || node.id).slice(0, 14)}…`
+                                : node.label || node.id}
+                            </text>
+                          </g>
+
+                          {/* Hop Role Badge */}
+                          {isDiscovered && (
+                            <g transform="translate(0, -32)">
+                              <rect
+                                x="-40"
+                                y="-7"
+                                width="80"
+                                height="14"
+                                rx="4"
+                                fill={
+                                  nodeHop === 0
+                                    ? '#78350f'
+                                    : nodeHop === 1
+                                    ? '#164e63'
+                                    : '#581c87'
+                                }
+                                stroke={strokeColor}
+                                strokeWidth="1"
+                              />
+                              <text
+                                textAnchor="middle"
+                                y="3"
+                                fill="#ffffff"
+                                fontSize="8"
+                                fontWeight="bold"
+                                fontFamily="sans-serif"
+                              >
+                                {nodeHop === 0
+                                  ? '🌱 Anchor'
+                                  : nodeHop === 1
+                                  ? '1-Hop'
+                                  : '2-Hop Evidence'}
+                              </text>
+                            </g>
+                          )}
+                        </g>
+                      );
+                    }
+
+                    // Default non-traversal node rendering
                     const isDimmed = selectedNodeId && !isSelected && !edges.some(
                       (e) => (e.source === selectedNodeId && e.target === node.id) ||
                              (e.target === selectedNodeId && e.source === node.id)
                     );
-                    const color = getNodeColor(node.type);
 
                     return (
                       <g

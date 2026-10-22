@@ -64,4 +64,39 @@ body {
   .slide-in-from-left {
     animation-name: slideInFromLeft;
   }
+
+  /* SMAR-23: Knowledge Graph Traversal Flashing and Gentle Pulse */
+  @keyframes gentlePulse {
+    0%, 100% {
+      opacity: 1;
+      transform: scale(1);
+    }
+    50% {
+      opacity: 0.75;
+      transform: scale(1.03);
+    }
+  }
+  @keyframes haloPulse {
+    0%, 100% {
+      stroke-opacity: 0.9;
+      stroke-width: 3.5px;
+    }
+    50% {
+      stroke-opacity: 0.4;
+      stroke-width: 5px;
+    }
+  }
+  .animate-gentle-pulse {
+    animation: gentlePulse 2s ease-in-out infinite;
+  }
+  .animate-halo-pulse {
+    animation: haloPulse 1.6s ease-in-out infinite;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .animate-gentle-pulse,
+    .animate-halo-pulse {
+      animation: none !important;
+      transform: none !important;
+    }
+  }
 }
