@@ -23,6 +23,8 @@ def _load_env_file():
         os.path.join(os.path.dirname(__file__), ".env"),
         os.path.join(os.path.dirname(__file__), "..", ".env"),
         "/app/.env",
+        "/app/.env.shared",
+        "/root/multica_workspaces/smartbriefm-deb1926d499b/.env",
         ".env",
     ]:
         if os.path.exists(candidate):
@@ -581,6 +583,83 @@ CANDIDATE_CONCEPTS: List[Dict[str, Any]] = [
             r"\battacking\s+(?:the\s+)?corners?\b",
         ],
     },
+    {
+        "name": "Environmental Economics",
+        "category": "Macroeconomics & Ecology",
+        "description": "Study of the economic impacts of environmental policies, market incentives, and planetary ecological boundaries.",
+        "patterns": [
+            r"\benvironmental\s+economics?\b",
+            r"\becological\s+boundaries\b",
+            r"\bnatural\s+capital\b",
+            r"\bbiodiversity\s+depletion\b",
+        ],
+    },
+    {
+        "name": "Carbon Pricing",
+        "category": "Policy Mechanism",
+        "description": "Market-based instruments such as cap-and-trade allowances, carbon taxes, and border carbon adjustments that internalize greenhouse gas emissions costs.",
+        "patterns": [
+            r"\bcarbon\s+pricing\b",
+            r"\bcap-and-trade\b",
+            r"\bborder\s+carbon\s+adjustments?\b",
+            r"\bcarbon\s+tax(?:es)?\b",
+            r"\bemissions\s+trading\b",
+        ],
+    },
+    {
+        "name": "Market Externalities",
+        "category": "Economic Theory",
+        "description": "Unpriced ecological costs and environmental degradation resulting from production and consumption not reflected in market prices.",
+        "patterns": [
+            r"\bmarket\s+externalit(?:y|ies)\b",
+            r"\bexternalized\s+market\s+failures?\b",
+            r"\bmarket\s+failures?\b",
+            r"\benvironmental\s+degradation\b",
+        ],
+    },
+    {
+        "name": "Circular Economy",
+        "category": "Industrial Ecology",
+        "description": "Regenerative economic framework transitioning away from linear extract-produce-dispose cycles toward closed-loop material recovery and renewable energy.",
+        "patterns": [
+            r"\bcircular\s+econom(?:y|ies|ic)\b",
+            r"\bclosed-loop\s+material\s+recovery\b",
+            r"\bextract-produce-dispose\b",
+        ],
+    },
+    {
+        "name": "Quantum Superposition & Entanglement",
+        "category": "Quantum Principle",
+        "description": "Fundamental quantum mechanical phenomena enabling qubits to exist in linear combinations of states and share instantaneous non-local correlations.",
+        "patterns": [
+            r"\bsuperposition\b",
+            r"\bentanglement\b",
+            r"\bquantum\s+mechanics\b",
+            r"\bquantum\s+correlations?\b",
+        ],
+    },
+    {
+        "name": "Topological Surface Codes",
+        "category": "Error Correction",
+        "description": "Fault-tolerant quantum error correction schemes using 2D lattices with topological protection to mitigate environmental decoherence and gate noise.",
+        "patterns": [
+            r"\bsurface\s+codes?\b",
+            r"\btopological\s+protection\b",
+            r"\bquantum\s+error\s+correction\b",
+            r"\bdecoherence\b",
+        ],
+    },
+    {
+        "name": "Superconducting Transmon Qubits",
+        "category": "Hardware Architecture",
+        "description": "Cryogenic quantum circuit architecture utilizing Josephson junctions to encode and manipulate quantum information with high gate fidelity.",
+        "patterns": [
+            r"\btransmon\b",
+            r"\bsuperconducting\s+transmon\b",
+            r"\btrapped-ion\b",
+            r"\bquantum\s+supremacy\b",
+        ],
+    },
 ]
 
 
@@ -614,6 +693,13 @@ def _extract_key_concepts(text: str) -> List[Dict[str, str]]:
             'of', 'is', 'are', 'was', 'were', 'be', 'been', 'being', 'have', 'has', 'had',
             'do', 'does', 'did', 'can', 'could', 'should', 'would', 'will', 'may', 'might', 'must',
             'all', 'each', 'every', 'both', 'few', 'more', 'most', 'other', 'some', 'such'
+        }
+        standalone_modifiers = {
+            'environmental', 'traditional', 'modern', 'recent', 'current', 'classical',
+            'general', 'common', 'various', 'several', 'many', 'numerous', 'significant',
+            'critical', 'crucial', 'important', 'primary', 'major', 'key', 'fundamental',
+            'global', 'local', 'international', 'national', 'historically', 'additionally',
+            'consequently', 'ultimately', 'notably', 'specifically', 'particularly'
         }
 
         def _clean_words(words):
@@ -656,7 +742,7 @@ def _extract_key_concepts(text: str) -> List[Dict[str, str]]:
             words = _clean_words(p.split())
             if words and 1 <= len(words) <= 4:
                 clean_p = ' '.join(words)
-                if not _is_overlap(clean_p) and len(clean_p) >= 3:
+                if not _is_overlap(clean_p) and len(clean_p) >= 3 and clean_p.lower() not in standalone_modifiers:
                     best_s = next((s for s in sentences if clean_p.lower() in s.lower()), sentences[0] if sentences else header_candidate)
                     found_concepts.append({
                         "name": clean_p,
@@ -672,14 +758,42 @@ def _extract_key_concepts(text: str) -> List[Dict[str, str]]:
         phrase_pattern = re.compile(
             r'\b(?:[A-Z][a-zA-Z0-9]*(?:[\'\’][a-zA-Z]+)?(?:\s+(?:de|du|of|the|and|for|in|on)\s+|\s+)){0,3}[A-Z][a-zA-Z0-9]*(?:[\'\’][a-zA-Z]+)?\b'
         )
+        sentence_start_noun_phrase = re.compile(
+            r'^([A-Z][a-zA-Z0-9-]+(?:\s+[a-zA-Z0-9-]+){1,2})\s+(?:examines|analyzes|harnesses|allows|requires|enables|provides|combines|consists|focuses|utilizes|produces|creates|aims|transitions|represents|is|are)\b'
+        )
         for s in sentences:
             if len(found_concepts) >= 3:
                 break
+            # Check for sentence-initial multi-word subject noun phrase first (e.g. "Environmental economics examines...")
+            subj_match = sentence_start_noun_phrase.match(s)
+            if subj_match and len(found_concepts) < 3:
+                subj_words = _clean_words(subj_match.group(1).strip().split())
+                if len(subj_words) >= 2:
+                    clean_subj = ' '.join(w.capitalize() if w.islower() else w for w in subj_words)
+                    if not _is_overlap(clean_subj) and len(clean_subj) >= 5:
+                        found_concepts.append({
+                            "name": clean_subj,
+                            "category": "Key Concept",
+                            "description": s[:240].strip() + ('.' if not s.strip().endswith('.') else ''),
+                        })
+                        existing_names.add(clean_subj.lower())
+                        if len(found_concepts) >= 3:
+                            break
+
             for match in phrase_pattern.finditer(s):
                 words = _clean_words(match.group().strip().split())
+                if len(words) == 1 and (words[0].lower() in standalone_modifiers or match.start() == 0):
+                    # Skip standalone sentence-initial adjectives/modifiers without a noun phrase
+                    if words[0].lower() in standalone_modifiers:
+                        continue
                 if len(words) >= 1:
                     clean_phrase = ' '.join(words)
-                    if not _is_overlap(clean_phrase) and len(clean_phrase) >= 4 and clean_phrase.lower() not in stop_words:
+                    if (
+                        not _is_overlap(clean_phrase)
+                        and len(clean_phrase) >= 4
+                        and clean_phrase.lower() not in stop_words
+                        and clean_phrase.lower() not in standalone_modifiers
+                    ):
                         found_concepts.append({
                             "name": clean_phrase,
                             "category": "Key Concept",

@@ -109,6 +109,19 @@ export default function DualPaneWorkspace({
   const summary = result.summary || '';
   const tripletCount = result.graph?.triplet_count || result.graph?.triplets?.length || (concepts.length > 0 ? concepts.length * 2 : 0);
 
+  // Determine whether OpenAI LLM or Local Heuristic Fallback was used
+  const isOpenAIEngine = useMemo(() => {
+    const storageBackend =
+      typeof result.provenance_summary === 'object' && result.provenance_summary !== null
+        ? String(result.provenance_summary.storage_backend || '')
+        : String(result.provenance_summary || '');
+    const firstCardAgent =
+      flashcards[0] && typeof flashcards[0].provenance === 'object' && flashcards[0].provenance !== null
+        ? String(flashcards[0].provenance.agent || '')
+        : '';
+    return /openai/i.test(storageBackend) || /openai/i.test(firstCardAgent);
+  }, [result.provenance_summary, flashcards]);
+
   // Word count & paragraphs
   const trimmed = sourceText.trim();
   const wordCount = trimmed ? trimmed.split(/\s+/).length : 0;
@@ -416,11 +429,45 @@ export default function DualPaneWorkspace({
                     <ShieldCheck className="w-3.5 h-3.5 text-emerald-600 pointer-events-none shrink-0" />
                     <span>100% PROV-O Grounded</span>
                   </span>
+                  {isOpenAIEngine ? (
+                    <span
+                      data-testid="ai-engine-badge"
+                      className="inline-flex items-center gap-1.5 font-semibold text-indigo-800 bg-indigo-50 px-2.5 py-1 rounded-lg border border-indigo-200/80"
+                    >
+                      <Sparkles className="w-3.5 h-3.5 text-indigo-600 pointer-events-none shrink-0" />
+                      <span>OpenAI GPT-4o-mini</span>
+                    </span>
+                  ) : (
+                    <span
+                      data-testid="ai-engine-badge"
+                      className="inline-flex items-center gap-1.5 font-semibold text-amber-800 bg-amber-50 px-2.5 py-1 rounded-lg border border-amber-200/80"
+                    >
+                      <SlidersHorizontal className="w-3.5 h-3.5 text-amber-600 pointer-events-none shrink-0" />
+                      <span>Local Heuristic Fallback</span>
+                    </span>
+                  )}
                 </div>
               ) : (
-                <div className="flex items-center gap-2 text-xs text-blue-700 font-semibold px-1">
+                <div className="flex flex-wrap items-center gap-2 text-xs text-blue-700 font-semibold px-1">
                   <BookOpen className="w-3.5 h-3.5 text-blue-600 pointer-events-none shrink-0" />
                   <span>Active Recall Study Deck Enabled ({flashcards.length} Cards)</span>
+                  {isOpenAIEngine ? (
+                    <span
+                      data-testid="ai-engine-badge"
+                      className="inline-flex items-center gap-1.5 font-semibold text-indigo-800 bg-indigo-50 px-2.5 py-1 rounded-lg border border-indigo-200/80"
+                    >
+                      <Sparkles className="w-3.5 h-3.5 text-indigo-600 pointer-events-none shrink-0" />
+                      <span>OpenAI GPT-4o-mini</span>
+                    </span>
+                  ) : (
+                    <span
+                      data-testid="ai-engine-badge"
+                      className="inline-flex items-center gap-1.5 font-semibold text-amber-800 bg-amber-50 px-2.5 py-1 rounded-lg border border-amber-200/80"
+                    >
+                      <SlidersHorizontal className="w-3.5 h-3.5 text-amber-600 pointer-events-none shrink-0" />
+                      <span>Local Heuristic Fallback</span>
+                    </span>
+                  )}
                 </div>
               )}
 

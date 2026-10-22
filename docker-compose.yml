@@ -6,10 +6,17 @@ services:
     container_name: smartbrief-backend
     ports:
       - "8003:8003"
+    env_file:
+      - path: /root/multica_workspaces/smartbriefm-deb1926d499b/.env
+        required: false
+      - path: ./.env
+        required: false
+    volumes:
+      - /root/multica_workspaces/smartbriefm-deb1926d499b/.env:/app/.env.shared:ro
     environment:
       - PORT=8003
       - HOST=0.0.0.0
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8003/api/health"]
       interval: 5s

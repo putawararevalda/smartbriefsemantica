@@ -4,6 +4,13 @@ import pytest
 from fastapi.testclient import TestClient
 from main import app
 
+
+@pytest.fixture(autouse=True)
+def isolate_openai_for_unit_tests(monkeypatch):
+    """Default unit tests to deterministic local mode unless explicitly set by a test."""
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+
 @pytest.fixture
 def client():
     """Create test client with active lifespan."""
@@ -807,6 +814,88 @@ def test_no_infrastructure_triples_in_ui_responses(client):
     export_content = export_resp.json()["content"]
     assert "extractedFrom" not in export_content
     assert "urn:smartbrief:doc:" not in export_content
+
+
+def test_local_heuristic_concept_extraction_environmental_and_quantum():
+    """Verify local heuristic concept extraction extracts meaningful multi-word concepts and rejects standalone sentence-initial adjectives (SMAR-20)."""
+    from main import _extract_key_concepts
+
+    env_sample = (
+        "Environmental economics examines the intricate interplay between global economic activity, "
+        "market incentives, and planetary ecological boundaries. Traditional neoclassical models often "
+        "treat environmental degradation as an externalized market failure, failing to account for the "
+        "finite carrying capacity of natural ecosystems and biodiversity depletion.\n\n"
+        "Modern carbon pricing mechanisms, including cap-and-trade allowances and border carbon adjustments, "
+        "aim to internalize greenhouse gas emissions costs across industrial supply chains. Furthermore, "
+        "circular economy frameworks transition modern production models away from linear extract-produce-dispose "
+        "cycles toward closed-loop material recovery, renewable energy deployment, and natural capital accounting "
+        "to achieve sustainable macroeconomic resilience."
+    )
+    env_concepts = _extract_key_concepts(env_sample)
+    assert len(env_concepts) == 3
+    env_names = [c["name"] for c in env_concepts]
+    assert "Environmental" not in env_names
+    assert "Traditional" not in env_names
+    assert "Modern" not in env_names
+    assert any("Environmental Economics" in n or "Carbon Pricing" in n or "Market Externalities" in n or "Circular Economy" in n for n in env_names)
+    for n in env_names:
+        assert len(n.split()) >= 2, f"Expected multi-word concept for Environmental Economics sample, got '{n}'"
+
+    quantum_sample = (
+        "Quantum computing harnesses the fundamental principles of quantum mechanics, specifically superposition "
+        "and entanglement, to solve complex computational problems intractable for classical computers. In quantum "
+        "systems, information is encoded in qubits rather than classical binary bits. Superposition allows qubits to "
+        "exist in probabilistic combinations of states, while entanglement creates instantaneous quantum correlations "
+        "between geographically separated particles.\n\n"
+        "Recent breakthroughs in superconducting transmon circuits and trapped-ion systems have demonstrated quantum "
+        "supremacy in targeted sampling benchmarks. However, achieving fault-tolerant quantum computation requires "
+        "robust quantum error correction, such as surface codes with topological protection, to overcome environmental "
+        "decoherence and gate noise in noisy intermediate-scale quantum devices."
+    )
+    quantum_concepts = _extract_key_concepts(quantum_sample)
+    assert len(quantum_concepts) == 3
+    quantum_names = [c["name"] for c in quantum_concepts]
+    assert "Recent" not in quantum_names
+    assert "Superposition" not in quantum_names
+    assert any("Quantum Superposition & Entanglement" in n for n in quantum_names)
+    assert any("Topological Surface Codes" in n for n in quantum_names)
+    assert any("Superconducting Transmon Qubits" in n for n in quantum_names)
+
+
+def test_local_fallback_process_environmental_sample(client, monkeypatch):
+    """Verify POST /api/process in local fallback mode returns meaningful multi-word concepts and fallback storage_backend."""
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    env_sample = (
+        "Environmental economics examines the intricate interplay between global economic activity, "
+        "market incentives, and planetary ecological boundaries. Traditional neoclassical models often "
+        "treat environmental degradation as an externalized market failure.\n\n"
+        "Modern carbon pricing mechanisms, including cap-and-trade allowances and border carbon adjustments, "
+        "aim to internalize greenhouse gas emissions costs. Circular economy frameworks transition modern "
+        "production models toward closed-loop material recovery."
+    )
+    resp = client.post("/api/process", json={"text": env_sample, "session_id": "smar20_fallback_test"})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["provenance_summary"]["storage_backend"] == "Semantica Oxigraph Embedded + Provenance SQLite"
+    concept_names = [c["name"] for c in data["concepts"]]
+    assert "Environmental" not in concept_names
+    assert "Traditional" not in concept_names
+    assert "Modern" not in concept_names
+    assert "Environmental Economics" in concept_names
+    assert "Carbon Pricing" in concept_names
+
+
+def test_shared_env_file_loading(monkeypatch):
+    """Verify _load_env_file loads OPENAI_API_KEY from shared workspace .env when present (SMAR-20)."""
+    import os
+    from main import _load_env_file
+
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    _load_env_file()
+    if os.path.exists("/app/.env.shared") or os.path.exists("/root/multica_workspaces/smartbriefm-deb1926d499b/.env"):
+        assert bool(os.environ.get("OPENAI_API_KEY", "").strip()) is True
+
+
 
 
 
