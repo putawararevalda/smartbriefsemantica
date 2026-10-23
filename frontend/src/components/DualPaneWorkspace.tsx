@@ -976,34 +976,39 @@ export default function DualPaneWorkspace({
                 concepts={concepts}
                 initialTriplets={result.graph?.triplets}
                 activeTraversalLineage={activeTraversalLineage}
-                onClearTraversalLineage={() => setActiveTraversalLineage(null)}
+                onClearTraversalLineage={() => {
+                  setActiveTraversalLineage(null);
+                  handleTabChange('qa');
+                }}
               />
             </div>
           )}
 
           {/* TAB 5: ASK KNOWLEDGE GRAPH Q&A PANEL (SMAR-14) */}
-          {activeTab === 'qa' && (
-            <div
-              id="tabpanel-qa"
-              role="tabpanel"
-              aria-labelledby="tab-qa"
-              ref={qaPanelRef}
-              className="space-y-4 animate-in fade-in duration-200"
-            >
-              <KnowledgeGraphQA
-                sessionId={
-                  result.provenance_summary?.session_id ||
-                  result.session_id ||
-                  'proc_active_session'
-                }
-                concepts={concepts}
-                documentTitle={documentTitle}
-                tripletCount={tripletCount}
-                onInspectTraversalOnCanvas={handleInspectTraversalOnCanvas}
-                onDispatchTraversal={handleDispatchTraversal}
-              />
-            </div>
-          )}
+          <div
+            id="tabpanel-qa"
+            role="tabpanel"
+            aria-labelledby="tab-qa"
+            ref={qaPanelRef}
+            className={`space-y-4 animate-in fade-in duration-200 ${
+              activeTab === 'qa' ? '' : 'hidden'
+            }`}
+            style={{ display: activeTab === 'qa' ? 'block' : 'none' }}
+          >
+            <KnowledgeGraphQA
+              sessionId={
+                result.provenance_summary?.session_id ||
+                result.session_id ||
+                'proc_active_session'
+              }
+              concepts={concepts}
+              documentTitle={documentTitle}
+              tripletCount={tripletCount}
+              onInspectTraversalOnCanvas={handleInspectTraversalOnCanvas}
+              onDispatchTraversal={handleDispatchTraversal}
+              isVisible={activeTab === 'qa'}
+            />
+          </div>
         </div>
       </div>
     </div>

@@ -38,6 +38,7 @@ export interface KnowledgeGraphQAProps {
     graphContext?: GraphContext;
     provenance?: RAGProvenance;
   }) => void;
+  isVisible?: boolean;
 }
 
 export default function KnowledgeGraphQA({
@@ -47,6 +48,7 @@ export default function KnowledgeGraphQA({
   tripletCount = 0,
   onInspectTraversalOnCanvas,
   onDispatchTraversal,
+  isVisible = true,
 }: KnowledgeGraphQAProps) {
   const [messages, setMessages] = useState<RAGChatMessage[]>([]);
   const [inputQuery, setInputQuery] = useState<string>('');
@@ -94,8 +96,10 @@ export default function KnowledgeGraphQA({
 
   // Auto-scroll to bottom of chat
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages, isLoading]);
+    if (isVisible) {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [messages, isLoading, isVisible]);
 
   // Generate dynamic suggestion chips based on extracted concepts
   const suggestionChips = useMemo(() => {
