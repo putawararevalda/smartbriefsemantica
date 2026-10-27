@@ -77,6 +77,31 @@ export function isInfrastructureTriple(triple: {
   return false;
 }
 
+// Canonicalize concept IDs across URIs, URNs, and local slugs
+export function normalizeConceptId(idOrUri?: string): string {
+  if (!idOrUri) return '';
+  const trimmed = idOrUri.trim();
+  const stripped = trimmed
+    .replace(/^https?:\/\/[^/]+\/(?:concept\/|ontology\/)?/, '')
+    .replace(/^urn:[^:]+:[^:]+:/, '')
+    .replace(/^concept:/i, '');
+  return `concept:${stripped}`.toLowerCase();
+}
+
+// Human-readable label generator for newly discovered entities
+export function formatConceptLabel(idOrUri?: string): string {
+  if (!idOrUri) return '';
+  const raw = idOrUri
+    .replace(/^https?:\/\/[^/]+\/(?:concept\/|ontology\/)?/, '')
+    .replace(/^urn:[^:]+:[^:]+:/, '')
+    .replace(/^concept:/i, '');
+  return raw
+    .split(/[_-]/)
+    .filter(Boolean)
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+    .join(' ');
+}
+
 export default function KnowledgeGraphExplorer({
   graph,
   concepts = [],
@@ -256,51 +281,67 @@ export default function KnowledgeGraphExplorer({
   const nodes: GraphNode[] = useMemo(() => {
     let baseNodes: GraphNode[] = [];
     if (graph?.nodes && graph.nodes.length > 0) {
-      baseNodes = [...graph.nodes];
+      baseNodes = graph.nodes.map((n) => ({
+        ...n,
+        id: normalizeConceptId(n.id),
+      }));
     } else if (concepts && concepts.length > 0) {
       baseNodes = concepts.map((c) => ({
-        id: c.id,
-        label: c.label || c.name || c.id,
+        id: normalizeConceptId(c.id),
+        label: c.label || c.name || formatConceptLabel(c.id),
         type: c.type || 'Concept',
         description: c.description || '',
       }));
     }
 
     if (activeTraversalLineage?.graphContext) {
-      const existingIds = new Set(baseNodes.map((n) => n.id.toLowerCase()));
+      const existingIds = new Set(baseNodes.map((n) => normalizeConceptId(n.id)));
+      const existingLabels = new Set(baseNodes.map((n) => n.label.toLowerCase()));
+
       // 1. Matched concept anchors
       (activeTraversalLineage.graphContext.matched_concepts || []).forEach((mc) => {
-        const id = mc.id || mc.name;
-        if (!existingIds.has(id.toLowerCase())) {
-          existingIds.add(id.toLowerCase());
+        const rawId = mc.id || mc.name || '';
+        const normId = normalizeConceptId(rawId);
+        const name = mc.name || formatConceptLabel(rawId);
+        if (!existingIds.has(normId) && !existingLabels.has(name.toLowerCase())) {
+          existingIds.add(normId);
+          existingLabels.add(name.toLowerCase());
           baseNodes.push({
-            id,
-            label: mc.name || mc.id,
+            id: normId,
+            label: name,
             type: mc.category || 'Concept',
             description: 'Concept anchor matched for GraphRAG query',
           });
         }
       });
-      // 2. Retrieved evidence triples entities
+
+      // 2. Retrieved evidence triples entities (excluding infrastructure & rdf:type)
       const triples = (activeTraversalLineage.graphContext.retrieved_triples || []).filter(
-        (t) => !isInfrastructureTriple(t)
+        (t) => !isInfrastructureTriple(t) && !t.predicate.includes('rdf-syntax-ns#type') && t.predicate !== 'rdf:type'
       );
       triples.forEach((t) => {
-        if (!existingIds.has(t.subject.toLowerCase())) {
-          existingIds.add(t.subject.toLowerCase());
+        const subjNormId = normalizeConceptId(t.subject);
+        const subjName = formatConceptLabel(t.subject);
+        if (!existingIds.has(subjNormId) && !existingLabels.has(subjName.toLowerCase())) {
+          existingIds.add(subjNormId);
+          existingLabels.add(subjName.toLowerCase());
           baseNodes.push({
-            id: t.subject,
-            label: t.subject,
-            type: 'Entity',
+            id: subjNormId,
+            label: subjName,
+            type: 'Concept',
             description: 'Asserted entity from retrieved evidence subgraph',
           });
         }
-        if (!existingIds.has(t.object.toLowerCase())) {
-          existingIds.add(t.object.toLowerCase());
+
+        const objNormId = normalizeConceptId(t.object);
+        const objName = formatConceptLabel(t.object);
+        if (!existingIds.has(objNormId) && !existingLabels.has(objName.toLowerCase())) {
+          existingIds.add(objNormId);
+          existingLabels.add(objName.toLowerCase());
           baseNodes.push({
-            id: t.object,
-            label: t.object,
-            type: 'Entity',
+            id: objNormId,
+            label: objName,
+            type: 'Concept',
             description: 'Asserted entity from retrieved evidence subgraph',
           });
         }
@@ -313,7 +354,11 @@ export default function KnowledgeGraphExplorer({
   const edges: GraphEdge[] = useMemo(() => {
     let baseEdges: GraphEdge[] = [];
     if (graph?.edges && graph.edges.length > 0) {
-      baseEdges = [...graph.edges];
+      baseEdges = graph.edges.map((e) => ({
+        ...e,
+        source: normalizeConceptId(e.source),
+        target: normalizeConceptId(e.target),
+      }));
     } else {
       concepts.forEach((c) => {
         if (Array.isArray(c.relations)) {
@@ -322,8 +367,8 @@ export default function KnowledgeGraphExplorer({
             const relName = parts[0] || 'relates_to';
             const targetId = parts.slice(1).join(':') || relStr;
             baseEdges.push({
-              source: c.id,
-              target: targetId,
+              source: normalizeConceptId(c.id),
+              target: normalizeConceptId(targetId),
               relation: relName,
             });
           });
@@ -339,16 +384,21 @@ export default function KnowledgeGraphExplorer({
       );
 
       const triples = (activeTraversalLineage.graphContext.retrieved_triples || []).filter(
-        (t) => !isInfrastructureTriple(t)
+        (t) => !isInfrastructureTriple(t) && !t.predicate.includes('rdf-syntax-ns#type') && t.predicate !== 'rdf:type'
       );
       triples.forEach((t) => {
-        const k = edgeKey(t.subject, t.predicate, t.object);
-        if (!existingKeys.has(k)) {
+        const normSource = normalizeConceptId(t.subject);
+        const normTarget = normalizeConceptId(t.object);
+        const relName = t.predicate
+          .replace(/^https?:\/\/[^/]+\/(?:ontology\/|ns\/)?/, '')
+          .replace(/^.*#/, '');
+        const k = edgeKey(normSource, relName, normTarget);
+        if (!existingKeys.has(k) && normSource !== normTarget) {
           existingKeys.add(k);
           baseEdges.push({
-            source: t.subject,
-            target: t.object,
-            relation: t.predicate,
+            source: normSource,
+            target: normTarget,
+            relation: relName,
           });
         }
       });
@@ -372,19 +422,19 @@ export default function KnowledgeGraphExplorer({
 
     if (matched.length > 0) {
       matched.forEach((mc) => {
-        const mcId = (mc.id || '').toLowerCase();
+        const mcNormId = normalizeConceptId(mc.id || mc.name || '');
         const mcName = (mc.name || '').toLowerCase();
         nodes.forEach((n) => {
           const nId = n.id.toLowerCase();
           const nLabel = n.label.toLowerCase();
           if (
-            (mcId && (nId === mcId || nLabel === mcId)) ||
+            (mcNormId && nId === mcNormId) ||
             (mcName && (nId === mcName || nLabel === mcName || nLabel.includes(mcName) || mcName.includes(nLabel)))
           ) {
             anchorIds.add(n.id);
           }
         });
-        if (mc.id) anchorIds.add(mc.id);
+        if (mcNormId) anchorIds.add(mcNormId);
       });
     }
 
